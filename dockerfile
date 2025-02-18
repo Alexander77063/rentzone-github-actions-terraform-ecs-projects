@@ -2,7 +2,7 @@
 FROM amazonlinux:2023
 
 # Set the locale
-RUN dnf install -y glibc-langpack-en && \
+RUN dnf install -y glibc-langpack-en glibc-locale-source && \
     localedef -i en_US -f UTF-8 en_US.UTF-8
 
 # Avoid interactive prompts (if any)
