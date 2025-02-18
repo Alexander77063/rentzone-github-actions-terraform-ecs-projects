@@ -2,8 +2,8 @@
 FROM amazonlinux:2023
 
 # Set the locale
-RUN yum update -y && \
-    yum install -y glibc-langpack-en && \
+RUN dnf update -y && \
+    dnf install -y glibc-langpack-en && \
     localedef -i en_US -f UTF-8 en_US.UTF-8
 
 # Avoid interactive prompts (if any)
@@ -22,8 +22,8 @@ ARG RDS_DB_NAME
 ARG RDS_DB_USERNAME
 ARG RDS_DB_PASSWORD
 
-# Use the build argument to set environment variables 
-ENV PERSONAL_ACCESS_TOKEN=$PERSONAL_ACCESS_TOKEN 
+# Use the build argument to set environment variables
+ENV PERSONAL_ACCESS_TOKEN=$PERSONAL_ACCESS_TOKEN
 ENV GITHUB_USERNAME=$GITHUB_USERNAME
 ENV REPOSITORY_NAME=$REPOSITORY_NAME
 ENV DOMAIN_NAME=$DOMAIN_NAME
@@ -33,17 +33,17 @@ ENV RDS_DB_USERNAME=$RDS_DB_USERNAME
 ENV RDS_DB_PASSWORD=$RDS_DB_PASSWORD
 
 # Update all packages
-RUN yum update -y
+RUN dnf update -y
 
 # Install Git
 RUN dnf install -y git
 
-# Install Apache, PHP and required extensions
+# Install Apache, PHP, and required extensions
 RUN dnf install -y httpd php php-cli php-fpm php-mysqlnd php-bcmath php-ctype php-fileinfo php-json php-mbstring php-openssl php-pdo php-gd php-tokenizer php-xml php-curl
 
 # Update memory_limit and max_execution_time in php.ini
-RUN sed -i '/^memory_limit =/ s/=.*$/= 256M/' /etc/php.ini \
-    && sed -i '/^max_execution_time =/ s/=.*$/= 300/' /etc/php.ini
+RUN sed -i 's/^memory_limit =.*/memory_limit = 256M/' /etc/php.ini && \
+    sed -i 's/^max_execution_time =.*/max_execution_time = 300/' /etc/php.ini
 
 # Enable mod_rewrite in Apache for .htaccess support
 RUN sed -i '/<Directory "\/var\/www\/html">/,/<\/Directory>/ s/AllowOverride None/AllowOverride All/' /etc/httpd/conf/httpd.conf
@@ -55,22 +55,22 @@ WORKDIR /var/www/html
 RUN git clone https://${PERSONAL_ACCESS_TOKEN}@github.com/${GITHUB_USERNAME}/${REPOSITORY_NAME}.git .
 
 # Set permissions for web and storage directories
-RUN chmod -R 777 /var/www/html \
-    && chmod -R 777 /var/www/html/bootstrap/cache/ \
-    && chmod -R 777 /var/www/html/storage/
+RUN chown -R apache:apache /var/www/html && \
+    chmod -R 755 /var/www/html && \
+    chmod -R 775 /var/www/html/bootstrap/cache/ /var/www/html/storage/
 
-# Update .env variables
-RUN sed -i "/^APP_URL=/ s|=.*$|=https://${DOMAIN_NAME}/|" .env \
-    && sed -i "/^DB_HOST=/ s|=.*$|=${RDS_ENDPOINT}|" .env \
-    && sed -i "/^DB_DATABASE=/ s|=.*$|=${RDS_DB_NAME}|" .env \
-    && sed -i "/^DB_USERNAME=/ s|=.*$|=${RDS_DB_USERNAME}|" .env \
-    && sed -i "/^DB_PASSWORD=/ s|=.*$|=${RDS_DB_PASSWORD}|" .env
+# Create or update .env file with environment variables
+RUN echo "APP_URL=https://${DOMAIN_NAME}/" > .env && \
+    echo "DB_HOST=${RDS_ENDPOINT}" >> .env && \
+    echo "DB_DATABASE=${RDS_DB_NAME}" >> .env && \
+    echo "DB_USERNAME=${RDS_DB_USERNAME}" >> .env && \
+    echo "DB_PASSWORD=${RDS_DB_PASSWORD}" >> .env
 
 # Replace AppServiceProvider.php
 COPY AppServiceProvider.php app/Providers/AppServiceProvider.php
 
-# Expose the default Apache and MySQL ports
-EXPOSE 80 3306
+# Expose the default Apache port
+EXPOSE 80
 
 # Copy the start-services script into the container
 COPY start-services.sh /usr/local/bin/start-services.sh
