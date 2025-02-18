@@ -2,15 +2,13 @@
 FROM amazonlinux:2023
 
 # Set the locale
-RUN dnf update -y && \
-    dnf install -y glibc-langpack-en && \
+RUN dnf install -y glibc-langpack-en && \
     localedef -i en_US -f UTF-8 en_US.UTF-8
 
 # Avoid interactive prompts (if any)
-ENV TERM=xterm
-ENV LANG=en_US.UTF-8
-ENV LANGUAGE=en_US:en
-ENV LC_ALL=en_US.UTF-8
+ENV TERM=xterm \
+    LANG=en_US.UTF-8 \
+    LC_ALL=en_US.UTF-8
 
 # Set the build argument directive
 ARG PERSONAL_ACCESS_TOKEN
@@ -23,14 +21,14 @@ ARG RDS_DB_USERNAME
 ARG RDS_DB_PASSWORD
 
 # Use the build argument to set environment variables
-ENV PERSONAL_ACCESS_TOKEN=$PERSONAL_ACCESS_TOKEN
-ENV GITHUB_USERNAME=$GITHUB_USERNAME
-ENV REPOSITORY_NAME=$REPOSITORY_NAME
-ENV DOMAIN_NAME=$DOMAIN_NAME
-ENV RDS_ENDPOINT=$RDS_ENDPOINT
-ENV RDS_DB_NAME=$RDS_DB_NAME
-ENV RDS_DB_USERNAME=$RDS_DB_USERNAME
-ENV RDS_DB_PASSWORD=$RDS_DB_PASSWORD
+ENV PERSONAL_ACCESS_TOKEN=$PERSONAL_ACCESS_TOKEN \
+    GITHUB_USERNAME=$GITHUB_USERNAME \
+    REPOSITORY_NAME=$REPOSITORY_NAME \
+    DOMAIN_NAME=$DOMAIN_NAME \
+    RDS_ENDPOINT=$RDS_ENDPOINT \
+    RDS_DB_NAME=$RDS_DB_NAME \
+    RDS_DB_USERNAME=$RDS_DB_USERNAME \
+    RDS_DB_PASSWORD=$RDS_DB_PASSWORD
 
 # Update all packages
 RUN dnf update -y
@@ -54,7 +52,7 @@ WORKDIR /var/www/html
 # Clone the GitHub repository
 RUN git clone https://${PERSONAL_ACCESS_TOKEN}@github.com/${GITHUB_USERNAME}/${REPOSITORY_NAME}.git .
 
-# Set permissions for web and storage directories
+# Set secure permissions for web and storage directories
 RUN chown -R apache:apache /var/www/html && \
     chmod -R 755 /var/www/html && \
     chmod -R 775 /var/www/html/bootstrap/cache/ /var/www/html/storage/
@@ -70,7 +68,7 @@ RUN echo "APP_URL=https://${DOMAIN_NAME}/" > .env && \
 COPY AppServiceProvider.php app/Providers/AppServiceProvider.php
 
 # Expose the default Apache port
-EXPOSE 80
+EXPOSE 80 3306
 
 # Copy the start-services script into the container
 COPY start-services.sh /usr/local/bin/start-services.sh
