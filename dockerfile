@@ -1,10 +1,16 @@
 # Use the latest version of the Amazon Linux base image
 FROM amazonlinux:2023
 
+# Set the locale
+RUN yum update -y && \
+    yum install -y glibc-langpack-en && \
+    localedef -i en_US -f UTF-8 en_US.UTF-8
+
 # Avoid interactive prompts (if any)
-ENV TERM=xterm \
-    LANG=en_US.UTF-8 \
-    LC_ALL=en_US.UTF-8
+ENV TERM=xterm
+ENV LANG=en_US.UTF-8
+ENV LANGUAGE=en_US:en
+ENV LC_ALL=en_US.UTF-8
 
 # Set the build argument directive
 ARG PERSONAL_ACCESS_TOKEN
