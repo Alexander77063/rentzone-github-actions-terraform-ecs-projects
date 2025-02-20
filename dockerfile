@@ -2,13 +2,21 @@
 FROM amazonlinux:2023
 
 # Set the locale
-RUN dnf install -y glibc-langpack-en glibc-locale-source && \
+RUN dnf update -y && \
+    dnf install -y \
+    glibc-langpack-en \
+    glibc-locale-source \
+    glibc-common && \
+    # Clean up DNF cache to reduce image size
+    dnf clean all && \
+    # Generate locale
     localedef -i en_US -f UTF-8 en_US.UTF-8
 
 # Avoid interactive prompts (if any)
-ENV TERM=xterm \
-    LANG=en_US.UTF-8 \
+ENV LANG=en_US.UTF-8 \
+    LANGUAGE=en_US:en \
     LC_ALL=en_US.UTF-8
+
 
 # Set the build argument directive
 ARG PERSONAL_ACCESS_TOKEN
