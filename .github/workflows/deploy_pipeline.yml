@@ -179,7 +179,7 @@ jobs:
     needs: 
       - configure_aws_credentials
       - deploy_aws_infrastructure
-    if: needs.deploy_aws_infrastructure.outputs.terraform_action != 'destroy'
+    if: needs.deploy_aws_infrastructure.outputs.terraform_action != 'apply'
     runs-on: ubuntu-latest
     steps:
       - name: Check for running EC2 runner
