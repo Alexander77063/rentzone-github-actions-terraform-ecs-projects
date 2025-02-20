@@ -313,6 +313,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4.2.2
 
+      - name: Retry Flyway Migration
+        run: |
+          for i in {1..5}; do
+            flyway migrate && break || sleep 15;
+          done
+
+
       - name: Download Flyway
         run: |
           wget -qO- https://repo1.maven.org/maven2/org/flywaydb/flyway-commandline/${{ env.FLYWAY_VERSION }}/flyway-commandline-${{ env.FLYWAY_VERSION }}-linux-x64.tar.gz | tar xvz && sudo ln -s `pwd`/flyway-${{ env.FLYWAY_VERSION }}/flyway /usr/local/bin 
