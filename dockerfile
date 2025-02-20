@@ -50,12 +50,14 @@ RUN sed -i '/<Directory "\/var\/www\/html">/,/<\/Directory>/ s/AllowOverride Non
 
 WORKDIR /var/www/html
 
-RUN git clone https://${PERSONAL_ACCESS_TOKEN}@github.com/${GITHUB_USERNAME}/${REPOSITORY_NAME}.git .
-
-RUN chown -R apache:apache /var/www/html && \
+# Clone the repository and create required directories
+RUN git clone https://${PERSONAL_ACCESS_TOKEN}@github.com/${GITHUB_USERNAME}/${REPOSITORY_NAME}.git . && \
+    mkdir -p bootstrap/cache storage && \
+    chown -R apache:apache /var/www/html && \
     chmod -R 755 /var/www/html && \
-    chmod -R 775 /var/www/html/bootstrap/cache/ /var/www/html/storage/
+    chmod -R 775 bootstrap/cache storage
 
+# Create .env file
 RUN echo "APP_URL=https://${DOMAIN_NAME}/" > .env && \
     echo "DB_HOST=${RDS_ENDPOINT}" >> .env && \
     echo "DB_DATABASE=${RDS_DB_NAME}" >> .env && \
