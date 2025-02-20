@@ -1,14 +1,8 @@
 FROM amazonlinux:2023
 
-# Set the locale
-RUN dnf update -y && \
-    dnf install -y glibc-locale-source && \
-    localedef -c -i en_US -f UTF-8 en_US.UTF-8 && \
-    dnf clean all
-
-ENV LANG=en_US.UTF-8 \
-    LANGUAGE=en_US:en \
-    LC_ALL=en_US.UTF-8
+# Set environment variables for locale directly
+ENV LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8
 
 ARG PERSONAL_ACCESS_TOKEN
 ARG GITHUB_USERNAME
@@ -28,9 +22,27 @@ ENV PERSONAL_ACCESS_TOKEN=$PERSONAL_ACCESS_TOKEN \
     RDS_DB_USERNAME=$RDS_DB_USERNAME \
     RDS_DB_PASSWORD=$RDS_DB_PASSWORD
 
-RUN dnf update -y
-RUN dnf install -y git
-RUN dnf install -y httpd php php-cli php-fpm php-mysqlnd php-bcmath php-ctype php-fileinfo php-json php-mbstring php-openssl php-pdo php-gd php-tokenizer php-xml php-curl
+# Install all required packages in a single layer
+RUN dnf update -y && \
+    dnf install -y \
+    git \
+    httpd \
+    php \
+    php-cli \
+    php-fpm \
+    php-mysqlnd \
+    php-bcmath \
+    php-ctype \
+    php-fileinfo \
+    php-json \
+    php-mbstring \
+    php-openssl \
+    php-pdo \
+    php-gd \
+    php-tokenizer \
+    php-xml \
+    php-curl && \
+    dnf clean all
 
 RUN sed -i 's/^memory_limit =.*/memory_limit = 256M/' /etc/php.ini && \
     sed -i 's/^max_execution_time =.*/max_execution_time = 300/' /etc/php.ini
