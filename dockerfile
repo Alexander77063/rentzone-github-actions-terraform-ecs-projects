@@ -1,24 +1,7 @@
 # Use the latest version of the Amazon Linux base image
 FROM amazonlinux:2023
 
-# Set the locale
-RUN dnf update -y && \
-    dnf install -y \
-    glibc-langpack-en \
-    glibc-locale-source \
-    glibc-common && \
-    # Clean up DNF cache to reduce image size
-    dnf clean all && \
-    # Generate locale
-    localedef -i en_US -f UTF-8 en_US.UTF-8
-
-# Avoid interactive prompts (if any)
-ENV LANG=en_US.UTF-8 \
-    LANGUAGE=en_US:en \
-    LC_ALL=en_US.UTF-8
-
-
-# Set the build argument directive
+# Set build arguments
 ARG PERSONAL_ACCESS_TOKEN
 ARG GITHUB_USERNAME
 ARG REPOSITORY_NAME
@@ -28,7 +11,7 @@ ARG RDS_DB_NAME
 ARG RDS_DB_USERNAME
 ARG RDS_DB_PASSWORD
 
-# Use the build argument to set environment variables
+# Set environment variables
 ENV PERSONAL_ACCESS_TOKEN=$PERSONAL_ACCESS_TOKEN \
     GITHUB_USERNAME=$GITHUB_USERNAME \
     REPOSITORY_NAME=$REPOSITORY_NAME \
@@ -36,53 +19,71 @@ ENV PERSONAL_ACCESS_TOKEN=$PERSONAL_ACCESS_TOKEN \
     RDS_ENDPOINT=$RDS_ENDPOINT \
     RDS_DB_NAME=$RDS_DB_NAME \
     RDS_DB_USERNAME=$RDS_DB_USERNAME \
-    RDS_DB_PASSWORD=$RDS_DB_PASSWORD
+    RDS_DB_PASSWORD=$RDS_DB_PASSWORD \
+    LANG=en_US.UTF-8 \
+    LANGUAGE=en_US:en \
+    LC_ALL=en_US.UTF-8
 
-# Update all packages
-RUN dnf update -y
+# Update and install all required packages in a single layer
+RUN dnf update -y && \
+    dnf install -y \
+    glibc-langpack-en \
+    glibc-locale-source \
+    glibc-common \
+    git \
+    httpd \
+    php \
+    php-cli \
+    php-fpm \
+    php-mysqlnd \
+    php-bcmath \
+    php-ctype \
+    php-fileinfo \
+    php-json \
+    php-mbstring \
+    php-openssl \
+    php-pdo \
+    php-gd \
+    php-tokenizer \
+    php-xml \
+    php-curl && \
+    dnf clean all && \
+    localedef -i en_US -f UTF-8 en_US.UTF-8
 
-# Install Git
-RUN dnf install -y git
-
-# Install Apache, PHP, and required extensions
-RUN dnf install -y httpd php php-cli php-fpm php-mysqlnd php-bcmath php-ctype php-fileinfo php-json php-mbstring php-openssl php-pdo php-gd php-tokenizer php-xml php-curl
-
-# Update memory_limit and max_execution_time in php.ini
+# Configure PHP and Apache in a single layer
 RUN sed -i 's/^memory_limit =.*/memory_limit = 256M/' /etc/php.ini && \
-    sed -i 's/^max_execution_time =.*/max_execution_time = 300/' /etc/php.ini
+    sed -i 's/^max_execution_time =.*/max_execution_time = 300/' /etc/php.ini && \
+    sed -i 's/^expose_php =.*/expose_php = Off/' /etc/php.ini && \
+    sed -i '/<Directory "\/var\/www\/html">/,/<\/Directory>/ s/AllowOverride None/AllowOverride All/' /etc/httpd/conf/httpd.conf && \
+    echo "ServerTokens Prod" >> /etc/httpd/conf/httpd.conf && \
+    echo "ServerSignature Off" >> /etc/httpd/conf/httpd.conf
 
-# Enable mod_rewrite in Apache for .htaccess support
-RUN sed -i '/<Directory "\/var\/www\/html">/,/<\/Directory>/ s/AllowOverride None/AllowOverride All/' /etc/httpd/conf/httpd.conf
-
-# Navigate to web directory
+# Set up application directory
 WORKDIR /var/www/html
 
-# Clone the GitHub repository
-RUN git clone https://${PERSONAL_ACCESS_TOKEN}@github.com/${GITHUB_USERNAME}/${REPOSITORY_NAME}.git .
-
-# Set secure permissions for web and storage directories
-RUN chown -R apache:apache /var/www/html && \
-    chmod -R 755 /var/www/html && \
-    chmod -R 775 /var/www/html/bootstrap/cache/ /var/www/html/storage/
-
-# Create or update .env file with environment variables
-RUN echo "APP_URL=https://${DOMAIN_NAME}/" > .env && \
+# Clone repository and set up application in a single layer
+RUN git clone https://${PERSONAL_ACCESS_TOKEN}@github.com/${GITHUB_USERNAME}/${REPOSITORY_NAME}.git . && \
+    # Create .env file
+    echo "APP_URL=https://${DOMAIN_NAME}/" > .env && \
     echo "DB_HOST=${RDS_ENDPOINT}" >> .env && \
     echo "DB_DATABASE=${RDS_DB_NAME}" >> .env && \
     echo "DB_USERNAME=${RDS_DB_USERNAME}" >> .env && \
-    echo "DB_PASSWORD=${RDS_DB_PASSWORD}" >> .env
+    echo "DB_PASSWORD=${RDS_DB_PASSWORD}" >> .env && \
+    # Set permissions
+    chown -R apache:apache /var/www/html && \
+    find /var/www/html -type f -exec chmod 644 {} \; && \
+    find /var/www/html -type d -exec chmod 755 {} \; && \
+    chmod -R 775 /var/www/html/bootstrap/cache/ /var/www/html/storage/
 
-# Replace AppServiceProvider.php
+# Copy configuration files
 COPY AppServiceProvider.php app/Providers/AppServiceProvider.php
-
-# Expose the default Apache port
-EXPOSE 80 3306
-
-# Copy the start-services script into the container
 COPY start-services.sh /usr/local/bin/start-services.sh
 
-# Ensure the script is executable
+# Set execute permissions for script
 RUN chmod +x /usr/local/bin/start-services.sh
 
-# Run the script to start both PHP-FPM and Apache
+# Expose ports
+EXPOSE 80 3306
+
+# Start services
 CMD ["/usr/local/bin/start-services.sh"]
