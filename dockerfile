@@ -2,12 +2,9 @@ FROM amazonlinux:2023
 
 # Set the locale
 RUN dnf update -y && \
-    dnf install -y \
-    glibc-langpack-en \
-    glibc-locale-source \
-    glibc-common && \
-    dnf clean all && \
-    localedef -i en_US -f UTF-8 en_US.UTF-8
+    dnf install -y glibc-locale-source && \
+    localedef -c -i en_US -f UTF-8 en_US.UTF-8 && \
+    dnf clean all
 
 ENV LANG=en_US.UTF-8 \
     LANGUAGE=en_US:en \
