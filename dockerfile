@@ -1,6 +1,5 @@
-FROM amazonlinux:2023
+FROM public.ecr.aws/amazonlinux/amazonlinux:2023
 
-# Set environment variables for locale directly
 ENV LANG=C.UTF-8 \
     LC_ALL=C.UTF-8
 
