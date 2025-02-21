@@ -176,7 +176,6 @@ jobs:
 
   # Start self-hosted EC2 runner
   start_runner:
-    name: Start self-hosted EC2 runner
     needs: 
       - configure_aws_credentials
       - deploy_aws_infrastructure
@@ -200,7 +199,7 @@ jobs:
         with:
           mode: start
           github-token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
-          ec2-image-id: ami-0509cddedbaef0e5a
+          ec2-image-id: ami-0c7217cdde317cfec  # Amazon Linux 2023 AMI
           ec2-instance-type: t2.micro
           subnet-id: ${{ needs.deploy_aws_infrastructure.outputs.private_data_subnet_az1_id }}
           security-group-id: ${{ needs.deploy_aws_infrastructure.outputs.runner_security_group_id }}
