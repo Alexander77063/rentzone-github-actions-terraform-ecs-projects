@@ -199,7 +199,7 @@ jobs:
         with:
           mode: start
           github-token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
-          ec2-image-id: ami-0c7217cdde317cfec  # Amazon Linux 2023 AMI
+          ec2-image-id: ami-0c7217cdde317cfec
           ec2-instance-type: t2.micro
           subnet-id: ${{ needs.deploy_aws_infrastructure.outputs.private_data_subnet_az1_id }}
           security-group-id: ${{ needs.deploy_aws_infrastructure.outputs.runner_security_group_id }}
@@ -208,11 +208,14 @@ jobs:
               {"Key": "Name", "Value": "ec2-github-runner"},
               {"Key": "GitHubRepository", "Value": "${{ github.repository }}"}
             ]
-            # Additional configurations added here
-          iam-role-name: "github-action-role"
-          instance-profile: "github-runner-profile"
-          setup-timeout: "10"
-          run-as-root: true
+          startup-script: |
+            #!/bin/bash
+            # Install Node.js 18 (LTS version with lower GLIBC requirements)
+            curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
+            . ~/.nvm/nvm.sh
+            nvm install 18
+            nvm use 18
+            nvm alias default 18
 
     outputs:
       label: ${{ steps.start-ec2-runner.outputs.label }}
