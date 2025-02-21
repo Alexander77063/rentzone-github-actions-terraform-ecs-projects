@@ -149,7 +149,7 @@ jobs:
   # Create ECR repository
   create_ecr_repository:
     name: Create ECR repository
-    needs: 
+    needs:
       - configure_aws_credentials
       - deploy_aws_infrastructure
     if: needs.deploy_aws_infrastructure.outputs.terraform_action != 'destroy'
@@ -175,8 +175,8 @@ jobs:
 
 
   # Start self-hosted EC2 runner
-  start_runner:
-    needs: 
+  start_self_hosted_ec2_runner:
+    needs:
       - configure_aws_credentials
       - deploy_aws_infrastructure
     if: needs.deploy_aws_infrastructure.outputs.terraform_action != 'destroy'
@@ -208,14 +208,20 @@ jobs:
               {"Key": "Name", "Value": "ec2-github-runner"},
               {"Key": "GitHubRepository", "Value": "${{ github.repository }}"}
             ]
-          startup-script: |
-            #!/bin/bash
-            # Install Node.js 18 (LTS version with lower GLIBC requirements)
-            curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
-            . ~/.nvm/nvm.sh
-            nvm install 18
-            nvm use 18
-            nvm alias default 18
+
+
+  # Add a new job that runs after the EC2 runner is started
+  deploy_application:
+    needs: start_self_hosted_ec2_runner
+    runs-on: self-hosted
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Checkout Repository
+        uses: actions/checkout@v4.2.2
 
     outputs:
       label: ${{ steps.start-ec2-runner.outputs.label }}
