@@ -235,7 +235,7 @@ jobs:
       - configure_aws_credentials
       - deploy_aws_infrastructure
       - create_ecr_repository
-      - start_runner
+      - start_self_hosted_ec2_runner
     if: needs.deploy_aws_infrastructure.outputs.terraform_action != 'destroy'
     runs-on: ubuntu-latest
     steps:
@@ -284,7 +284,7 @@ jobs:
     needs:
       - configure_aws_credentials
       - deploy_aws_infrastructure
-      - start_runner
+      - start_self_hosted_ec2_runner
       - build_and_push_image
     if: needs.deploy_aws_infrastructure.outputs.terraform_action != 'destroy'
     runs-on: ubuntu-latest
@@ -318,7 +318,7 @@ jobs:
     name: Migrate data into RDS database with Flyway
     needs:
       - deploy_aws_infrastructure
-      - start_runner
+      - start_self_hosted_ec2_runner
       - build_and_push_image
     if: needs.deploy_aws_infrastructure.outputs.terraform_action != 'destroy'
     runs-on: self-hosted
