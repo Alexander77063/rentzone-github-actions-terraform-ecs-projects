@@ -149,7 +149,7 @@ jobs:
   # Create ECR repository
   create_ecr_repository:
     name: Create ECR repository
-    needs:
+    needs: 
       - configure_aws_credentials
       - deploy_aws_infrastructure
     if: needs.deploy_aws_infrastructure.outputs.terraform_action != 'destroy'
@@ -175,8 +175,9 @@ jobs:
 
 
   # Start self-hosted EC2 runner
-  start_self_hosted_ec2_runner:
-    needs:
+  start_runner:
+    name: Start self-hosted EC2 runner
+    needs: 
       - configure_aws_credentials
       - deploy_aws_infrastructure
     if: needs.deploy_aws_infrastructure.outputs.terraform_action != 'destroy'
@@ -199,7 +200,7 @@ jobs:
         with:
           mode: start
           github-token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
-          ec2-image-id: ami-0c7217cdde317cfec
+          ec2-image-id: ami-0509cddedbaef0e5a
           ec2-instance-type: t2.micro
           subnet-id: ${{ needs.deploy_aws_infrastructure.outputs.private_data_subnet_az1_id }}
           security-group-id: ${{ needs.deploy_aws_infrastructure.outputs.runner_security_group_id }}
@@ -208,20 +209,6 @@ jobs:
               {"Key": "Name", "Value": "ec2-github-runner"},
               {"Key": "GitHubRepository", "Value": "${{ github.repository }}"}
             ]
-
-
-  # Add a new job that runs after the EC2 runner is started
-  deploy_application:
-    needs: start_self_hosted_ec2_runner
-    runs-on: self-hosted
-    steps:
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
-
-      - name: Checkout Repository
-        uses: actions/checkout@v4.2.2
 
     outputs:
       label: ${{ steps.start-ec2-runner.outputs.label }}
@@ -235,7 +222,7 @@ jobs:
       - configure_aws_credentials
       - deploy_aws_infrastructure
       - create_ecr_repository
-      - start_self_hosted_ec2_runner
+      - start_runner
     if: needs.deploy_aws_infrastructure.outputs.terraform_action != 'destroy'
     runs-on: ubuntu-latest
     steps:
@@ -284,7 +271,7 @@ jobs:
     needs:
       - configure_aws_credentials
       - deploy_aws_infrastructure
-      - start_self_hosted_ec2_runner
+      - start_runner
       - build_and_push_image
     if: needs.deploy_aws_infrastructure.outputs.terraform_action != 'destroy'
     runs-on: ubuntu-latest
@@ -318,10 +305,10 @@ jobs:
     name: Migrate data into RDS database with Flyway
     needs:
       - deploy_aws_infrastructure
-      - start_self_hosted_ec2_runner
+      - start_runner
       - build_and_push_image
     if: needs.deploy_aws_infrastructure.outputs.terraform_action != 'destroy'
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4.2.2
