@@ -208,6 +208,11 @@ jobs:
               {"Key": "Name", "Value": "ec2-github-runner"},
               {"Key": "GitHubRepository", "Value": "${{ github.repository }}"}
             ]
+            # Additional configurations added here
+          iam-role-name: "github-action-role"
+          instance-profile: "github-runner-profile"
+          setup-timeout: "10"
+          run-as-root: true
 
     outputs:
       label: ${{ steps.start-ec2-runner.outputs.label }}
