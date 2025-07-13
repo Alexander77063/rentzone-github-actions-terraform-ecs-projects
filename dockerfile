@@ -1,418 +1,132 @@
-name: Deploy Pipeline
+FROM ubuntu:22.04
 
-on:
-  push:
-    branches: [ main ]
-  workflow_dispatch:
-    inputs:
-      terraform_action:
-        description: 'Terraform Action'
-        required: true
-        default: 'apply'
-        type: choice
-        options:
-          - apply
-          - destroy
+ENV DEBIAN_FRONTEND=noninteractive \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8
 
-env:
-  AWS_REGION: us-east-1
-  TERRAFORM_ACTION: ${{ github.event.inputs.terraform_action || 'apply' }}
-  
-  # Application Configuration
-  GITHUB_USERNAME: Alexander77063
-  REPOSITORY_NAME: application-codes
-  WEB_FILE_ZIP: rentzone.zip
-  WEB_FILE_UNZIP: rentzone
-  FLYWAY_VERSION: 11.3.3
+ARG PERSONAL_ACCESS_TOKEN
+ARG GITHUB_USERNAME
+ARG REPOSITORY_NAME
+ARG DOMAIN_NAME
+ARG RDS_ENDPOINT
+ARG RDS_DB_NAME
+ARG RDS_DB_USERNAME
+ARG RDS_DB_PASSWORD
 
-jobs:
-  # Combined infrastructure and ECR setup
-  setup-infrastructure:
-    name: Setup AWS Infrastructure
-    runs-on: ubuntu-latest
-    outputs:
-      terraform_action: ${{ env.TERRAFORM_ACTION }}
-      image_name: ${{ steps.terraform-outputs.outputs.image_name }}
-      domain_name: ${{ steps.terraform-outputs.outputs.domain_name }}
-      rds_endpoint: ${{ steps.terraform-outputs.outputs.rds_endpoint }}
-      image_tag: ${{ steps.terraform-outputs.outputs.image_tag }}
-      task_definition_name: ${{ steps.terraform-outputs.outputs.task_definition_name }}
-      ecs_cluster_name: ${{ steps.terraform-outputs.outputs.ecs_cluster_name }}
-      ecs_service_name: ${{ steps.terraform-outputs.outputs.ecs_service_name }}
-      environment_file_name: ${{ steps.terraform-outputs.outputs.environment_file_name }}
-      env_file_bucket_name: ${{ steps.terraform-outputs.outputs.env_file_bucket_name }}
-    
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+ENV PERSONAL_ACCESS_TOKEN=$PERSONAL_ACCESS_TOKEN \
+    GITHUB_USERNAME=$GITHUB_USERNAME \
+    REPOSITORY_NAME=$REPOSITORY_NAME \
+    DOMAIN_NAME=$DOMAIN_NAME \
+    RDS_ENDPOINT=$RDS_ENDPOINT \
+    RDS_DB_NAME=$RDS_DB_NAME \
+    RDS_DB_USERNAME=$RDS_DB_USERNAME \
+    RDS_DB_PASSWORD=$RDS_DB_PASSWORD
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+# Install packages
+RUN apt-get update && \
+    apt-get install -y \
+    git \
+    apache2 \
+    php \
+    php-cli \
+    php-mysql \
+    php-mbstring \
+    php-xml \
+    php-gd \
+    php-curl \
+    php-bcmath \
+    php-zip \
+    mysql-client \
+    netcat-openbsd \
+    curl && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 
-      - name: Verify AWS Configuration
-        run: |
-          echo "Testing AWS configuration..."
-          aws sts get-caller-identity
-          echo "AWS CLI version:"
-          aws --version
-          echo "Current region: ${{ env.AWS_REGION }}"
+# Configure PHP
+RUN sed -i 's/memory_limit = .*/memory_limit = 256M/' /etc/php/8.1/apache2/php.ini && \
+    sed -i 's/max_execution_time = .*/max_execution_time = 300/' /etc/php/8.1/apache2/php.ini
 
-      - name: Verify AWS Configuration
-        run: |
-          echo "Testing AWS configuration..."
-          aws sts get-caller-identity
-          echo "AWS CLI version:"
-          aws --version
-          echo "Current region: ${{ env.AWS_REGION }}"
+# Enable Apache modules
+RUN a2enmod rewrite && \
+    a2enmod php8.1
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.10.5
-          terraform_wrapper: false
+# Configure Apache for Laravel
+RUN echo '<Directory /var/www/html>' > /etc/apache2/conf-available/laravel.conf && \
+    echo '    Options Indexes FollowSymLinks' >> /etc/apache2/conf-available/laravel.conf && \
+    echo '    AllowOverride All' >> /etc/apache2/conf-available/laravel.conf && \
+    echo '    Require all granted' >> /etc/apache2/conf-available/laravel.conf && \
+    echo '</Directory>' >> /etc/apache2/conf-available/laravel.conf && \
+    a2enconf laravel
 
-      - name: Terraform Init
-        working-directory: ./iac
-        run: terraform init
+WORKDIR /var/www/html
 
-      - name: Terraform Plan
-        if: env.TERRAFORM_ACTION == 'apply'
-        working-directory: ./iac
-        run: terraform plan
+# Clone repository with error handling
+RUN echo "Cloning repository..." && \
+    git clone https://${PERSONAL_ACCESS_TOKEN}@github.com/${GITHUB_USERNAME}/${REPOSITORY_NAME}.git . && \
+    echo "Repository cloned successfully" && \
+    ls -la
 
-      - name: Terraform Apply/Destroy
-        working-directory: ./iac
-        run: terraform ${{ env.TERRAFORM_ACTION }} -auto-approve
+# Set up Laravel directories and permissions
+RUN mkdir -p bootstrap/cache storage/logs storage/framework/sessions storage/framework/views storage/framework/cache && \
+    chown -R www-data:www-data /var/www/html && \
+    chmod -R 755 /var/www/html && \
+    chmod -R 775 bootstrap/cache storage
 
-      - name: Extract Terraform Outputs
-        if: env.TERRAFORM_ACTION == 'apply'
-        id: terraform-outputs
-        working-directory: ./iac
-        run: |
-          # List all available outputs for debugging
-          echo "Available Terraform outputs:"
-          terraform output
-          
-          # Check if outputs exist before extracting
-          if terraform output image_name >/dev/null 2>&1; then
-            echo "image_name=$(terraform output -raw image_name)" >> $GITHUB_OUTPUT
-          else
-            echo "Warning: image_name output not found"
-            exit 1
-          fi
-          
-          echo "domain_name=$(terraform output -raw domain_name)" >> $GITHUB_OUTPUT
-          echo "rds_endpoint=$(terraform output -raw rds_endpoint)" >> $GITHUB_OUTPUT
-          echo "image_tag=$(terraform output -raw image_tag)" >> $GITHUB_OUTPUT
-          echo "task_definition_name=$(terraform output -raw task_definition_name)" >> $GITHUB_OUTPUT
-          echo "ecs_cluster_name=$(terraform output -raw ecs_cluster_name)" >> $GITHUB_OUTPUT
-          echo "ecs_service_name=$(terraform output -raw ecs_service_name)" >> $GITHUB_OUTPUT
-          echo "environment_file_name=$(terraform output -raw environment_file_name)" >> $GITHUB_OUTPUT
-          echo "env_file_bucket_name=$(terraform output -raw env_file_bucket_name)" >> $GITHUB_OUTPUT
+# Create .env file
+RUN echo "APP_NAME=RentZone" > .env && \
+    echo "APP_ENV=production" >> .env && \
+    echo "APP_KEY=" >> .env && \
+    echo "APP_DEBUG=false" >> .env && \
+    echo "APP_URL=https://${DOMAIN_NAME}/" >> .env && \
+    echo "LOG_CHANNEL=stderr" >> .env && \
+    echo "LOG_LEVEL=info" >> .env && \
+    echo "" >> .env && \
+    echo "DB_CONNECTION=mysql" >> .env && \
+    echo "DB_HOST=${RDS_ENDPOINT}" >> .env && \
+    echo "DB_PORT=3306" >> .env && \
+    echo "DB_DATABASE=${RDS_DB_NAME}" >> .env && \
+    echo "DB_USERNAME=${RDS_DB_USERNAME}" >> .env && \
+    echo "DB_PASSWORD=${RDS_DB_PASSWORD}" >> .env && \
+    echo "" >> .env && \
+    echo "BROADCAST_DRIVER=log" >> .env && \
+    echo "CACHE_DRIVER=file" >> .env && \
+    echo "FILESYSTEM_DISK=local" >> .env && \
+    echo "QUEUE_CONNECTION=sync" >> .env && \
+    echo "SESSION_DRIVER=file" >> .env && \
+    echo "SESSION_LIFETIME=120" >> .env
 
-      - name: Create ECR Repository
-        if: env.TERRAFORM_ACTION == 'apply'
-        run: |
-          IMAGE_NAME="${{ steps.terraform-outputs.outputs.image_name }}"
-          if [ -z "$IMAGE_NAME" ]; then
-            echo "Error: image_name is empty"
-            exit 1
-          fi
-          
-          if ! aws ecr describe-repositories --repository-names "$IMAGE_NAME" >/dev/null 2>&1; then
-            echo "Creating ECR repository: $IMAGE_NAME"
-            aws ecr create-repository --repository-name "$IMAGE_NAME"
-          else
-            echo "ECR repository already exists: $IMAGE_NAME"
-          fi
+COPY AppServiceProvider.php app/Providers/AppServiceProvider.php
 
-  # Combined build, migration, and deployment
-  deploy-application:
-    name: Deploy Application
-    needs: setup-infrastructure
-    if: needs.setup-infrastructure.outputs.terraform_action == 'apply'
-    runs-on: ubuntu-latest
-    
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+# Create comprehensive startup script
+RUN echo '#!/bin/bash' > /usr/local/bin/start-services.sh && \
+    echo 'set -e' >> /usr/local/bin/start-services.sh && \
+    echo 'echo "=== Starting RentZone Application ==="' >> /usr/local/bin/start-services.sh && \
+    echo 'cd /var/www/html' >> /usr/local/bin/start-services.sh && \
+    echo '' >> /usr/local/bin/start-services.sh && \
+    echo '# Generate application key' >> /usr/local/bin/start-services.sh && \
+    echo 'echo "Generating application key..."' >> /usr/local/bin/start-services.sh && \
+    echo 'php artisan key:generate --force' >> /usr/local/bin/start-services.sh && \
+    echo '' >> /usr/local/bin/start-services.sh && \
+    echo '# Wait for database (optional - will timeout gracefully)' >> /usr/local/bin/start-services.sh && \
+    echo 'echo "Testing database connection..."' >> /usr/local/bin/start-services.sh && \
+    echo 'timeout 30 bash -c "until nc -z \${DB_HOST} 3306; do sleep 1; done" || echo "Database not immediately available, continuing..."' >> /usr/local/bin/start-services.sh && \
+    echo '' >> /usr/local/bin/start-services.sh && \
+    echo '# Try to run migrations if database is available' >> /usr/local/bin/start-services.sh && \
+    echo 'if nc -z \${DB_HOST} 3306; then' >> /usr/local/bin/start-services.sh && \
+    echo '    echo "Running database migrations..."' >> /usr/local/bin/start-services.sh && \
+    echo '    php artisan migrate --force || echo "Migration failed, but continuing..."' >> /usr/local/bin/start-services.sh && \
+    echo 'fi' >> /usr/local/bin/start-services.sh && \
+    echo '' >> /usr/local/bin/start-services.sh && \
+    echo '# Start Apache' >> /usr/local/bin/start-services.sh && \
+    echo 'echo "Starting Apache web server..."' >> /usr/local/bin/start-services.sh && \
+    echo 'source /etc/apache2/envvars' >> /usr/local/bin/start-services.sh && \
+    echo 'exec /usr/sbin/apache2 -D FOREGROUND' >> /usr/local/bin/start-services.sh && \
+    chmod +x /usr/local/bin/start-services.sh
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+EXPOSE 80
 
-      - name: Login to Amazon ECR
-        uses: aws-actions/amazon-ecr-login@v2
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost/ || exit 1
 
-      - name: Build and Push Docker Image
-        env:
-          IMAGE_NAME: ${{ needs.setup-infrastructure.outputs.image_name }}
-          IMAGE_TAG: ${{ needs.setup-infrastructure.outputs.image_tag }}
-          DOMAIN_NAME: ${{ needs.setup-infrastructure.outputs.domain_name }}
-          RDS_ENDPOINT: ${{ needs.setup-infrastructure.outputs.rds_endpoint }}
-        run: |
-          # Build Docker image with all required build args
-          docker build \
-            --build-arg PERSONAL_ACCESS_TOKEN="${{ secrets.PERSONAL_ACCESS_TOKEN }}" \
-            --build-arg GITHUB_USERNAME="${{ env.GITHUB_USERNAME }}" \
-            --build-arg REPOSITORY_NAME="${{ env.REPOSITORY_NAME }}" \
-            --build-arg WEB_FILE_ZIP="${{ env.WEB_FILE_ZIP }}" \
-            --build-arg WEB_FILE_UNZIP="${{ env.WEB_FILE_UNZIP }}" \
-            --build-arg DOMAIN_NAME="${{ env.DOMAIN_NAME }}" \
-            --build-arg RDS_ENDPOINT="${{ env.RDS_ENDPOINT }}" \
-            --build-arg RDS_DB_NAME="${{ secrets.RDS_DB_NAME }}" \
-            --build-arg RDS_DB_USERNAME="${{ secrets.RDS_DB_USERNAME }}" \
-            --build-arg RDS_DB_PASSWORD="${{ secrets.RDS_DB_PASSWORD }}" \
-            -t ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }} .
-          
-          # Tag and push to ECR
-          docker tag ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }} ${{ secrets.ECR_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
-          docker push ${{ secrets.ECR_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
-
-      - name: Create and Upload Environment File
-        env:
-          ENVIRONMENT_FILE_NAME: ${{ needs.setup-infrastructure.outputs.environment_file_name }}
-          ENV_FILE_BUCKET_NAME: ${{ needs.setup-infrastructure.outputs.env_file_bucket_name }}
-          DOMAIN_NAME: ${{ needs.setup-infrastructure.outputs.domain_name }}
-          RDS_ENDPOINT: ${{ needs.setup-infrastructure.outputs.rds_endpoint }}
-        run: |
-          # Debug: Print all environment variables
-          echo "=== Debugging Environment Variables ==="
-          echo "ENVIRONMENT_FILE_NAME: '${{ env.ENVIRONMENT_FILE_NAME }}'"
-          echo "ENV_FILE_BUCKET_NAME: '${{ env.ENV_FILE_BUCKET_NAME }}'"
-          echo "DOMAIN_NAME: '${{ env.DOMAIN_NAME }}'"
-          echo "RDS_ENDPOINT: '${{ env.RDS_ENDPOINT }}'"
-          echo "======================================="
-          
-          # Validate required variables
-          if [ -z "${{ env.ENVIRONMENT_FILE_NAME }}" ]; then
-            echo "Error: ENVIRONMENT_FILE_NAME is empty"
-            exit 1
-          fi
-          
-          if [ -z "${{ env.ENV_FILE_BUCKET_NAME }}" ]; then
-            echo "Error: ENV_FILE_BUCKET_NAME is empty"
-            echo "This means your Terraform is not outputting 'env_file_bucket_name'"
-            echo "Please check your Terraform configuration in ./iac directory"
-            exit 1
-          fi
-          
-          # Create environment file
-          cat > ${{ env.ENVIRONMENT_FILE_NAME }} << EOF
-          PERSONAL_ACCESS_TOKEN=${{ secrets.PERSONAL_ACCESS_TOKEN }}
-          GITHUB_USERNAME=${{ env.GITHUB_USERNAME }}
-          REPOSITORY_NAME=${{ env.REPOSITORY_NAME }}
-          WEB_FILE_ZIP=${{ env.WEB_FILE_ZIP }}
-          WEB_FILE_UNZIP=${{ env.WEB_FILE_UNZIP }}
-          DOMAIN_NAME=${{ env.DOMAIN_NAME }}
-          RDS_ENDPOINT=${{ env.RDS_ENDPOINT }}
-          RDS_DB_NAME=${{ secrets.RDS_DB_NAME }}
-          RDS_DB_USERNAME=${{ secrets.RDS_DB_USERNAME }}
-          RDS_DB_PASSWORD=${{ secrets.RDS_DB_PASSWORD }}
-          EOF
-          
-          echo "Created environment file: ${{ env.ENVIRONMENT_FILE_NAME }}"
-          echo "File contents:"
-          cat ${{ env.ENVIRONMENT_FILE_NAME }}
-          
-          # Validate S3 bucket exists
-          echo "Checking if S3 bucket exists: ${{ env.ENV_FILE_BUCKET_NAME }}"
-          if aws s3 ls "s3://${{ env.ENV_FILE_BUCKET_NAME }}" >/dev/null 2>&1; then
-            echo "✅ S3 bucket exists and is accessible"
-          else
-            echo "❌ S3 bucket does not exist or is not accessible"
-            echo "Creating bucket: ${{ env.ENV_FILE_BUCKET_NAME }}"
-            aws s3 mb "s3://${{ env.ENV_FILE_BUCKET_NAME }}" --region ${{ env.AWS_REGION }}
-          fi
-          
-          # Upload to S3
-          echo "Uploading to: s3://${{ env.ENV_FILE_BUCKET_NAME }}/${{ env.ENVIRONMENT_FILE_NAME }}"
-          aws s3 cp ${{ env.ENVIRONMENT_FILE_NAME }} s3://${{ env.ENV_FILE_BUCKET_NAME }}/${{ env.ENVIRONMENT_FILE_NAME }}
-          
-          echo "✅ Environment file uploaded successfully"
-
-      - name: Run Database Migration
-        env:
-          RDS_ENDPOINT: ${{ needs.setup-infrastructure.outputs.rds_endpoint }}
-        run: |
-          # Validate required variables
-          if [ -z "${{ env.RDS_ENDPOINT }}" ] || [ -z "${{ secrets.RDS_DB_NAME }}" ]; then
-            echo "Error: Missing required database connection variables"
-            exit 1
-          fi
-          
-          # Extract just the hostname from RDS endpoint (remove :3306 if present)
-          RDS_HOST=$(echo "${{ env.RDS_ENDPOINT }}" | cut -d':' -f1)
-          echo "RDS Host: $RDS_HOST"
-          
-          # Download and setup Flyway
-          echo "Downloading Flyway ${{ env.FLYWAY_VERSION }}..."
-          wget -qO- https://repo1.maven.org/maven2/org/flywaydb/flyway-commandline/${{ env.FLYWAY_VERSION }}/flyway-commandline-${{ env.FLYWAY_VERSION }}-linux-x64.tar.gz | tar xvz
-          sudo ln -s $(pwd)/flyway-${{ env.FLYWAY_VERSION }}/flyway /usr/local/bin
-          
-          # Check if sql directory exists
-          if [ ! -d "sql" ]; then
-            echo "Warning: sql directory not found, skipping migration"
-            exit 0
-          fi
-          
-          # Setup SQL files
-          rm -rf flyway-${{ env.FLYWAY_VERSION }}/sql/
-          cp -r sql flyway-${{ env.FLYWAY_VERSION }}/
-          
-          # Test network connectivity to RDS
-          echo "Testing network connectivity to RDS..."
-          if ! nc -z "$RDS_HOST" 3306; then
-            echo "❌ Cannot reach RDS database from GitHub Actions runner"
-            echo "This is expected if your RDS is in a private subnet"
-            echo "Skipping database migration - will be handled by ECS application on first startup"
-            exit 0
-          fi
-          
-          # If we can connect, proceed with migration
-          cd flyway-${{ env.FLYWAY_VERSION }}
-          echo "Starting database migration..."
-          for i in {1..3}; do
-            echo "Migration attempt $i/3"
-            if flyway -url=jdbc:mysql://$RDS_HOST:3306/${{ secrets.RDS_DB_NAME }} \
-              -user=${{ secrets.RDS_DB_USERNAME }} \
-              -password=${{ secrets.RDS_DB_PASSWORD }} \
-              -locations=filesystem:sql migrate; then
-              echo "✅ Migration completed successfully"
-              break
-            else
-              echo "Migration failed, attempt $i/3"
-              if [ $i -eq 3 ]; then
-                echo "⚠️  All migration attempts failed - database will be migrated by application"
-                echo "This is normal if RDS is in private subnet"
-                exit 0
-              fi
-              sleep 30
-            fi
-          done
-
-      - name: Update ECS Service
-        env:
-          ECS_CLUSTER_NAME: ${{ needs.setup-infrastructure.outputs.ecs_cluster_name }}
-          ECS_SERVICE_NAME: ${{ needs.setup-infrastructure.outputs.ecs_service_name }}
-          ECS_FAMILY: ${{ needs.setup-infrastructure.outputs.task_definition_name }}
-          ECS_IMAGE: ${{ secrets.ECR_REGISTRY }}/${{ needs.setup-infrastructure.outputs.image_name }}:${{ needs.setup-infrastructure.outputs.image_tag }}
-        run: |
-          # Validate required variables
-          if [ -z "${{ env.ECS_CLUSTER_NAME }}" ] || [ -z "${{ env.ECS_SERVICE_NAME }}" ] || [ -z "${{ env.ECS_FAMILY }}" ]; then
-            echo "Error: Missing required ECS variables"
-            echo "Cluster: ${{ env.ECS_CLUSTER_NAME }}"
-            echo "Service: ${{ env.ECS_SERVICE_NAME }}"
-            echo "Task Definition: ${{ env.ECS_FAMILY }}"
-            exit 1
-          fi
-          
-          echo "Updating ECS service with image: ${{ env.ECS_IMAGE }}"
-          
-          # Get current task definition
-          echo "Fetching current task definition..."
-          TASK_DEFINITION=$(aws ecs describe-task-definition --task-definition ${{ env.ECS_FAMILY }})
-          
-          if [ $? -ne 0 ]; then
-            echo "Failed to fetch task definition: ${{ env.ECS_FAMILY }}"
-            exit 1
-          fi
-          
-          # Create new task definition with updated image
-          echo "Creating new task definition..."
-          NEW_TASK_DEFINITION=$(echo "$TASK_DEFINITION" | jq --arg IMAGE "${{ env.ECS_IMAGE }}" '
-            .taskDefinition | 
-            .containerDefinitions[0].image = $IMAGE | 
-            del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)
-          ')
-          
-          # Register new task definition
-          echo "Registering new task definition..."
-          NEW_TASK_INFO=$(aws ecs register-task-definition --cli-input-json "$NEW_TASK_DEFINITION")
-          
-          if [ $? -ne 0 ]; then
-            echo "Failed to register new task definition"
-            exit 1
-          fi
-          
-          NEW_TD_REVISION=$(echo "$NEW_TASK_INFO" | jq -r '.taskDefinition.revision')
-          echo "New task definition revision: $NEW_TD_REVISION"
-          
-          # Update service
-          echo "Updating ECS service..."
-          aws ecs update-service \
-            --cluster ${{ env.ECS_CLUSTER_NAME }} \
-            --service ${{ env.ECS_SERVICE_NAME }} \
-            --task-definition ${{ env.ECS_FAMILY }}:$NEW_TD_REVISION \
-            --force-new-deployment
-          
-          if [ $? -ne 0 ]; then
-            echo "Failed to update ECS service"
-            exit 1
-          fi
-          
-          # Check service status before waiting
-          echo "Checking current service status..."
-          aws ecs describe-services \
-            --cluster ${{ env.ECS_CLUSTER_NAME }} \
-            --services ${{ env.ECS_SERVICE_NAME }} \
-            --query 'services[0].{Status:status,TaskDefinition:taskDefinition,DesiredCount:desiredCount,RunningCount:runningCount,PendingCount:pendingCount}'
-          
-          # Get recent task failures for debugging
-          echo "Checking for task failures..."
-          FAILED_TASKS=$(aws ecs list-tasks \
-            --cluster ${{ env.ECS_CLUSTER_NAME }} \
-            --service-name ${{ env.ECS_SERVICE_NAME }} \
-            --desired-status STOPPED \
-            --query 'taskArns[0:3]' \
-            --output text)
-          
-          if [ "$FAILED_TASKS" != "None" ] && [ ! -z "$FAILED_TASKS" ]; then
-            echo "Recent failed tasks found. Getting failure details..."
-            for task in $FAILED_TASKS; do
-              if [ "$task" != "None" ]; then
-                echo "Task: $task"
-                aws ecs describe-tasks \
-                  --cluster ${{ env.ECS_CLUSTER_NAME }} \
-                  --tasks $task \
-                  --query 'tasks[0].{StoppedReason:stoppedReason,Containers:containers[*].{Name:name,Reason:reason,ExitCode:exitCode}}'
-              fi
-            done
-          fi
-          
-          # Wait for service to stabilize with timeout
-          echo "Waiting for ECS service to become stable (timeout: 15 minutes)..."
-          timeout 900 aws ecs wait services-stable \
-            --cluster ${{ env.ECS_CLUSTER_NAME }} \
-            --services ${{ env.ECS_SERVICE_NAME }}
-          
-          WAIT_RESULT=$?
-          
-          if [ $WAIT_RESULT -eq 0 ]; then
-            echo "✅ Deployment completed successfully!"
-            echo "🚀 Application is now running at: ${{ needs.setup-infrastructure.outputs.domain_name }}"
-          elif [ $WAIT_RESULT -eq 124 ]; then
-            echo "⏰ Service deployment timed out after 15 minutes"
-            echo "Checking current status..."
-            aws ecs describe-services \
-              --cluster ${{ env.ECS_CLUSTER_NAME }} \
-              --services ${{ env.ECS_SERVICE_NAME }} \
-              --query 'services[0].{Status:status,RunningCount:runningCount,DesiredCount:desiredCount,Events:events[0:5].{CreatedAt:createdAt,Message:message}}'
-            echo "⚠️  Check CloudWatch logs for container startup issues"
-            echo "🔗 CloudWatch Logs: https://console.aws.amazon.com/cloudwatch/home?region=us-east-1#logsV2:log-groups/log-group/%2Fecs%2F${{ env.ECS_FAMILY }}"
-            exit 1
-          else
-            echo "❌ Service did not stabilize"
-            aws ecs describe-services \
-              --cluster ${{ env.ECS_CLUSTER_NAME }} \
-              --services ${{ env.ECS_SERVICE_NAME }} \
-              --query 'services[0].events[0:10]'
-            exit 1
-          fi
+CMD ["/usr/local/bin/start-services.sh"]
