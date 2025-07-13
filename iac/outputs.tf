@@ -55,8 +55,8 @@ output "environment_file_name" {
 }
 
 # s3 bucket name
-output "env_file_bucket_name" {
-  value = aws_s3_bucket.env_file_bucket.id
+output "env_file_bucket_1_name" {
+  value = aws_s3_bucket.env_file_bucket_1.id
 }
 
 # website url
