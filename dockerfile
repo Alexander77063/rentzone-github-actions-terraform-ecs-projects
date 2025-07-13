@@ -21,31 +21,27 @@ ENV PERSONAL_ACCESS_TOKEN=$PERSONAL_ACCESS_TOKEN \
     RDS_DB_USERNAME=$RDS_DB_USERNAME \
     RDS_DB_PASSWORD=$RDS_DB_PASSWORD
 
-# Install packages
-RUN dnf update -y && \
-    dnf install -y \
-    git \
-    httpd \
-    php \
-    php-cli \
-    php-fpm \
-    php-mysqlnd \
-    php-bcmath \
-    php-fileinfo \
-    php-mbstring \
-    php-openssl \
-    php-pdo \
-    php-gd \
-    php-xml \
-    php-curl \
-    mysql \
-    nmap-ncat && \
-    dnf clean all
+# Install packages in stages to better handle errors
+RUN dnf update -y
 
-# Configure PHP and Apache
+# Install basic packages
+RUN dnf install -y git httpd mysql
+
+# Install PHP and common extensions
+RUN dnf install -y php php-cli php-fpm php-mysqlnd php-mbstring php-xml php-gd php-curl php-pdo
+
+# Install additional tools
+RUN dnf install -y nmap-ncat curl
+
+# Clean up
+RUN dnf clean all
+
+# Configure PHP
 RUN sed -i 's/^memory_limit =.*/memory_limit = 256M/' /etc/php.ini && \
-    sed -i 's/^max_execution_time =.*/max_execution_time = 300/' /etc/php.ini && \
-    sed -i '/<Directory "\/var\/www\/html">/,/<\/Directory>/ s/AllowOverride None/AllowOverride All/' /etc/httpd/conf/httpd.conf
+    sed -i 's/^max_execution_time =.*/max_execution_time = 300/' /etc/php.ini
+
+# Configure Apache
+RUN sed -i '/<Directory "\/var\/www\/html">/,/<\/Directory>/ s/AllowOverride None/AllowOverride All/' /etc/httpd/conf/httpd.conf
 
 WORKDIR /var/www/html
 
@@ -72,13 +68,18 @@ RUN echo "APP_NAME=RentZone" > .env && \
 
 COPY AppServiceProvider.php app/Providers/AppServiceProvider.php
 
-# Create simple startup script
+# Create startup script
 RUN echo '#!/bin/bash' > /usr/local/bin/start-services.sh && \
+    echo 'set -e' >> /usr/local/bin/start-services.sh && \
+    echo 'echo "Starting RentZone Application..."' >> /usr/local/bin/start-services.sh && \
     echo 'cd /var/www/html' >> /usr/local/bin/start-services.sh && \
+    echo 'echo "Generating application key..."' >> /usr/local/bin/start-services.sh && \
     echo 'php artisan key:generate --force' >> /usr/local/bin/start-services.sh && \
+    echo 'echo "Starting PHP-FPM..."' >> /usr/local/bin/start-services.sh && \
     echo 'mkdir -p /run/php-fpm' >> /usr/local/bin/start-services.sh && \
     echo 'php-fpm -D' >> /usr/local/bin/start-services.sh && \
-    echo '/usr/sbin/httpd -D FOREGROUND' >> /usr/local/bin/start-services.sh && \
+    echo 'echo "Starting Apache..."' >> /usr/local/bin/start-services.sh && \
+    echo 'exec /usr/sbin/httpd -D FOREGROUND' >> /usr/local/bin/start-services.sh && \
     chmod +x /usr/local/bin/start-services.sh
 
 EXPOSE 80
