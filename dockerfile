@@ -4,28 +4,15 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8
 
-ARG PERSONAL_ACCESS_TOKEN
-ARG GITHUB_USERNAME
-ARG REPOSITORY_NAME
 ARG DOMAIN_NAME
 ARG RDS_ENDPOINT
 ARG RDS_DB_NAME
 ARG RDS_DB_USERNAME
 ARG RDS_DB_PASSWORD
 
-ENV PERSONAL_ACCESS_TOKEN=$PERSONAL_ACCESS_TOKEN \
-    GITHUB_USERNAME=$GITHUB_USERNAME \
-    REPOSITORY_NAME=$REPOSITORY_NAME \
-    DOMAIN_NAME=$DOMAIN_NAME \
-    RDS_ENDPOINT=$RDS_ENDPOINT \
-    RDS_DB_NAME=$RDS_DB_NAME \
-    RDS_DB_USERNAME=$RDS_DB_USERNAME \
-    RDS_DB_PASSWORD=$RDS_DB_PASSWORD
-
 # Install packages
 RUN apt-get update && \
     apt-get install -y \
-    git \
     apache2 \
     php \
     php-cli \
@@ -60,11 +47,8 @@ RUN echo '<Directory /var/www/html>' > /etc/apache2/conf-available/laravel.conf 
 
 WORKDIR /var/www/html
 
-# Clone repository with error handling
-RUN echo "Cloning repository..." && \
-    git clone https://${PERSONAL_ACCESS_TOKEN}@github.com/${GITHUB_USERNAME}/${REPOSITORY_NAME}.git . && \
-    echo "Repository cloned successfully" && \
-    ls -la
+# Copy application code (from GitHub Actions build context)
+COPY . .
 
 # Set up Laravel directories and permissions
 RUN mkdir -p bootstrap/cache storage/logs storage/framework/sessions storage/framework/views storage/framework/cache && \
@@ -95,9 +79,10 @@ RUN echo "APP_NAME=RentZone" > .env && \
     echo "SESSION_DRIVER=file" >> .env && \
     echo "SESSION_LIFETIME=120" >> .env
 
-COPY AppServiceProvider.php app/Providers/AppServiceProvider.php
+# Copy AppServiceProvider if it exists
+COPY AppServiceProvider.php app/Providers/AppServiceProvider.php 2>/dev/null || echo "AppServiceProvider.php not found, using default"
 
-# Create comprehensive startup script
+# Create startup script
 RUN echo '#!/bin/bash' > /usr/local/bin/start-services.sh && \
     echo 'set -e' >> /usr/local/bin/start-services.sh && \
     echo 'echo "=== Starting RentZone Application ==="' >> /usr/local/bin/start-services.sh && \
@@ -107,14 +92,17 @@ RUN echo '#!/bin/bash' > /usr/local/bin/start-services.sh && \
     echo 'echo "Generating application key..."' >> /usr/local/bin/start-services.sh && \
     echo 'php artisan key:generate --force' >> /usr/local/bin/start-services.sh && \
     echo '' >> /usr/local/bin/start-services.sh && \
-    echo '# Wait for database (optional - will timeout gracefully)' >> /usr/local/bin/start-services.sh && \
+    echo '# Test database connection' >> /usr/local/bin/start-services.sh && \
     echo 'echo "Testing database connection..."' >> /usr/local/bin/start-services.sh && \
-    echo 'timeout 30 bash -c "until nc -z \${DB_HOST} 3306; do sleep 1; done" || echo "Database not immediately available, continuing..."' >> /usr/local/bin/start-services.sh && \
+    echo 'DB_HOST_CLEAN=$(echo ${DB_HOST} | cut -d: -f1)' >> /usr/local/bin/start-services.sh && \
+    echo 'timeout 30 bash -c "until nc -z ${DB_HOST_CLEAN} 3306; do sleep 1; done" || echo "Database not immediately available"' >> /usr/local/bin/start-services.sh && \
     echo '' >> /usr/local/bin/start-services.sh && \
-    echo '# Try to run migrations if database is available' >> /usr/local/bin/start-services.sh && \
-    echo 'if nc -z \${DB_HOST} 3306; then' >> /usr/local/bin/start-services.sh && \
+    echo '# Run migrations if database is available' >> /usr/local/bin/start-services.sh && \
+    echo 'if nc -z ${DB_HOST_CLEAN} 3306; then' >> /usr/local/bin/start-services.sh && \
     echo '    echo "Running database migrations..."' >> /usr/local/bin/start-services.sh && \
-    echo '    php artisan migrate --force || echo "Migration failed, but continuing..."' >> /usr/local/bin/start-services.sh && \
+    echo '    php artisan migrate --force || echo "Migration failed, continuing..."' >> /usr/local/bin/start-services.sh && \
+    echo 'else' >> /usr/local/bin/start-services.sh && \
+    echo '    echo "Database not available, skipping migrations"' >> /usr/local/bin/start-services.sh && \
     echo 'fi' >> /usr/local/bin/start-services.sh && \
     echo '' >> /usr/local/bin/start-services.sh && \
     echo '# Start Apache' >> /usr/local/bin/start-services.sh && \
