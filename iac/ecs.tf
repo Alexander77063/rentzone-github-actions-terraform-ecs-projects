@@ -17,7 +17,8 @@ resource "aws_cloudwatch_log_group" "log_group" {
   }
 }
 
-# create task definition
+# In your Terraform ECS task definition, find this section and update it:
+
 resource "aws_ecs_task_definition" "ecs_task_definition" {
   family                   = "${var.project_name}-${var.environment}-td"
   execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
@@ -31,7 +32,7 @@ resource "aws_ecs_task_definition" "ecs_task_definition" {
     cpu_architecture        = var.architecture
   }
 
-  # create container definition
+  # UPDATED container definition - REMOVE the environmentFiles section
   container_definitions = jsonencode([
     {
       name      = "${var.project_name}-${var.environment}-container"
@@ -42,13 +43,6 @@ resource "aws_ecs_task_definition" "ecs_task_definition" {
         {
           containerPort = 80
           hostPort      = 80
-        }
-      ]
-
-      environmentFiles = [
-        {
-          value = "arn:aws:s3:::${var.project_name}-${var.env_file_bucket_name}/${var.env_file_name}"
-          type  = "s3"
         }
       ]
 
@@ -63,7 +57,6 @@ resource "aws_ecs_task_definition" "ecs_task_definition" {
     }
   ])
 }
-
 # create ecs service
 resource "aws_ecs_service" "ecs_service" {
   name                               = "${var.project_name}-${var.environment}-service"
