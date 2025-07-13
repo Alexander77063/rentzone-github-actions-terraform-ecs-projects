@@ -1,84 +1,41 @@
-FROM ubuntu:22.04
+vFROM ubuntu:22.04
 
-ENV DEBIAN_FRONTEND=noninteractive \
-    LANG=C.UTF-8 \
-    LC_ALL=C.UTF-8
+ENV DEBIAN_FRONTEND=noninteractive
 
-ARG DOMAIN_NAME
-ARG RDS_ENDPOINT
-ARG RDS_DB_NAME
-ARG RDS_DB_USERNAME
-ARG RDS_DB_PASSWORD
-
-# Install packages
+# Install basic packages
 RUN apt-get update && \
-    apt-get install -y \
-    apache2 \
-    php \
-    php-cli \
-    php-mysql \
-    php-mbstring \
-    php-xml \
-    php-gd \
-    php-curl \
-    php-bcmath \
-    php-zip \
-    mysql-client \
-    netcat-openbsd \
-    curl && \
+    apt-get install -y apache2 php php-cli curl && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# Configure PHP
-RUN sed -i 's/memory_limit = .*/memory_limit = 256M/' /etc/php/8.1/apache2/php.ini && \
-    sed -i 's/max_execution_time = .*/max_execution_time = 300/' /etc/php/8.1/apache2/php.ini
-
-# Enable Apache modules
-RUN a2enmod rewrite && a2enmod php8.1
-
-# Configure Apache
-RUN echo '<Directory /var/www/html>' > /etc/apache2/conf-available/laravel.conf && \
-    echo '    Options Indexes FollowSymLinks' >> /etc/apache2/conf-available/laravel.conf && \
-    echo '    AllowOverride All' >> /etc/apache2/conf-available/laravel.conf && \
-    echo '    Require all granted' >> /etc/apache2/conf-available/laravel.conf && \
-    echo '</Directory>' >> /etc/apache2/conf-available/laravel.conf && \
-    a2enconf laravel
+# Enable PHP module
+RUN a2enmod php8.1
 
 WORKDIR /var/www/html
 
-# Copy all application files
-COPY . .
-
-# Create required directories
-RUN mkdir -p bootstrap/cache storage/logs storage/framework/sessions storage/framework/views storage/framework/cache
+# Create a simple test page first
+RUN echo '<?php' > index.php && \
+    echo 'echo "<h1>RentZone Application</h1>";' >> index.php && \
+    echo 'echo "<p>Status: Running</p>";' >> index.php && \
+    echo 'echo "<p>PHP Version: " . phpversion() . "</p>";' >> index.php && \
+    echo 'echo "<p>Server Time: " . date("Y-m-d H:i:s") . "</p>";' >> index.php && \
+    echo 'if (extension_loaded("mysqli")) {' >> index.php && \
+    echo '    echo "<p>MySQL: Available</p>";' >> index.php && \
+    echo '} else {' >> index.php && \
+    echo '    echo "<p>MySQL: Not Available</p>";' >> index.php && \
+    echo '}' >> index.php && \
+    echo '?>' >> index.php
 
 # Set permissions
-RUN chown -R www-data:www-data /var/www/html && \
-    chmod -R 755 /var/www/html && \
-    chmod -R 775 bootstrap/cache storage
+RUN chown -R www-data:www-data /var/www/html
 
-# Create .env file
-RUN echo "APP_NAME=RentZone" > .env && \
-    echo "APP_ENV=production" >> .env && \
-    echo "APP_KEY=" >> .env && \
-    echo "APP_DEBUG=false" >> .env && \
-    echo "APP_URL=https://${DOMAIN_NAME}/" >> .env && \
-    echo "LOG_CHANNEL=stderr" >> .env && \
-    echo "DB_CONNECTION=mysql" >> .env && \
-    echo "DB_HOST=${RDS_ENDPOINT}" >> .env && \
-    echo "DB_PORT=3306" >> .env && \
-    echo "DB_DATABASE=${RDS_DB_NAME}" >> .env && \
-    echo "DB_USERNAME=${RDS_DB_USERNAME}" >> .env && \
-    echo "DB_PASSWORD=${RDS_DB_PASSWORD}" >> .env
-
-# Create startup script
-RUN echo '#!/bin/bash' > /usr/local/bin/start-services.sh && \
-    echo 'cd /var/www/html' >> /usr/local/bin/start-services.sh && \
-    echo 'php artisan key:generate --force' >> /usr/local/bin/start-services.sh && \
-    echo 'source /etc/apache2/envvars' >> /usr/local/bin/start-services.sh && \
-    echo 'exec /usr/sbin/apache2 -D FOREGROUND' >> /usr/local/bin/start-services.sh && \
-    chmod +x /usr/local/bin/start-services.sh
+# Create simple startup script
+RUN echo '#!/bin/bash' > /usr/local/bin/start.sh && \
+    echo 'echo "Starting Apache..."' >> /usr/local/bin/start.sh && \
+    echo 'source /etc/apache2/envvars' >> /usr/local/bin/start.sh && \
+    echo 'exec /usr/sbin/apache2 -D FOREGROUND' >> /usr/local/bin/start.sh && \
+    chmod +x /usr/local/bin/start.sh
 
 EXPOSE 80
 
-CMD ["/usr/local/bin/start-services.sh"]
+CMD ["/usr/local/bin/start.sh"]

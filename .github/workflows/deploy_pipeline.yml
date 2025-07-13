@@ -158,13 +158,23 @@ jobs:
           DOMAIN_NAME: ${{ needs.setup-infrastructure.outputs.domain_name }}
           RDS_ENDPOINT: ${{ needs.setup-infrastructure.outputs.rds_endpoint }}
         run: |
-          # Build Docker image with all required build args
+          echo "=== Preparing Application Code ==="
+          
+          # Clone the application repository
+          echo "Cloning application code..."
+          git clone https://${{ secrets.PERSONAL_ACCESS_TOKEN }}@github.com/${{ env.GITHUB_USERNAME }}/${{ env.REPOSITORY_NAME }}.git app-code
+          
+          # Copy application files to current directory
+          cp -r app-code/* .
+          cp -r app-code/.* . 2>/dev/null || true
+          rm -rf app-code
+          
+          echo "Application code prepared successfully"
+          ls -la
+          
+          echo "=== Building Docker Image ==="
+          # Build Docker image (no git clone needed inside Docker)
           docker build \
-            --build-arg PERSONAL_ACCESS_TOKEN="${{ secrets.PERSONAL_ACCESS_TOKEN }}" \
-            --build-arg GITHUB_USERNAME="${{ env.GITHUB_USERNAME }}" \
-            --build-arg REPOSITORY_NAME="${{ env.REPOSITORY_NAME }}" \
-            --build-arg WEB_FILE_ZIP="${{ env.WEB_FILE_ZIP }}" \
-            --build-arg WEB_FILE_UNZIP="${{ env.WEB_FILE_UNZIP }}" \
             --build-arg DOMAIN_NAME="${{ env.DOMAIN_NAME }}" \
             --build-arg RDS_ENDPOINT="${{ env.RDS_ENDPOINT }}" \
             --build-arg RDS_DB_NAME="${{ secrets.RDS_DB_NAME }}" \
@@ -173,6 +183,7 @@ jobs:
             -t ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }} .
           
           # Tag and push to ECR
+          echo "=== Pushing to ECR ==="
           docker tag ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }} ${{ secrets.ECR_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
           docker push ${{ secrets.ECR_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
 
@@ -400,13 +411,67 @@ jobs:
             echo "🚀 Application is now running at: ${{ needs.setup-infrastructure.outputs.domain_name }}"
           elif [ $WAIT_RESULT -eq 124 ]; then
             echo "⏰ Service deployment timed out after 15 minutes"
-            echo "Checking current status..."
+            echo ""
+            echo "=== Current Service Status ==="
             aws ecs describe-services \
               --cluster ${{ env.ECS_CLUSTER_NAME }} \
               --services ${{ env.ECS_SERVICE_NAME }} \
-              --query 'services[0].{Status:status,RunningCount:runningCount,DesiredCount:desiredCount,Events:events[0:5].{CreatedAt:createdAt,Message:message}}'
-            echo "⚠️  Check CloudWatch logs for container startup issues"
+              --query 'services[0].{Status:status,RunningCount:runningCount,DesiredCount:desiredCount}'
+            
+            echo ""
+            echo "=== Recent Service Events ==="
+            aws ecs describe-services \
+              --cluster ${{ env.ECS_CLUSTER_NAME }} \
+              --services ${{ env.ECS_SERVICE_NAME }} \
+              --query 'services[0].events[0:10].{CreatedAt:createdAt,Message:message}' \
+              --output table
+            
+            echo ""
+            echo "=== Failed Task Details ==="
+            FAILED_TASKS=$(aws ecs list-tasks \
+              --cluster ${{ env.ECS_CLUSTER_NAME }} \
+              --service-name ${{ env.ECS_SERVICE_NAME }} \
+              --desired-status STOPPED \
+              --max-items 3 \
+              --query 'taskArns' \
+              --output text)
+            
+            if [ "$FAILED_TASKS" != "None" ] && [ ! -z "$FAILED_TASKS" ]; then
+              for task_arn in $FAILED_TASKS; do
+                if [ "$task_arn" != "None" ]; then
+                  echo "--- Task: $task_arn ---"
+                  aws ecs describe-tasks \
+                    --cluster ${{ env.ECS_CLUSTER_NAME }} \
+                    --tasks $task_arn \
+                    --query 'tasks[0].{StoppedReason:stoppedReason,StoppedAt:stoppedAt,LastStatus:lastStatus,Containers:containers[*].{Name:name,LastStatus:lastStatus,Reason:reason,ExitCode:exitCode}}' \
+                    --output table
+                  echo ""
+                fi
+              done
+            else
+              echo "No failed tasks found"
+            fi
+            
+            echo ""
+            echo "=== Load Balancer Target Health ==="
+            TARGET_GROUP_ARN=$(aws ecs describe-services \
+              --cluster ${{ env.ECS_CLUSTER_NAME }} \
+              --services ${{ env.ECS_SERVICE_NAME }} \
+              --query 'services[0].loadBalancers[0].targetGroupArn' \
+              --output text)
+            
+            if [ "$TARGET_GROUP_ARN" != "None" ] && [ ! -z "$TARGET_GROUP_ARN" ]; then
+              aws elbv2 describe-target-health \
+                --target-group-arn $TARGET_GROUP_ARN \
+                --query 'TargetHealthDescriptions[*].{Target:Target.Id,Port:Target.Port,Health:TargetHealth.State,Reason:TargetHealth.Reason,Description:TargetHealth.Description}' \
+                --output table
+            fi
+            
+            echo ""
             echo "🔗 CloudWatch Logs: https://console.aws.amazon.com/cloudwatch/home?region=us-east-1#logsV2:log-groups/log-group/%2Fecs%2F${{ env.ECS_FAMILY }}"
+            echo "🔗 ECS Service: https://console.aws.amazon.com/ecs/home?region=us-east-1#/clusters/${{ env.ECS_CLUSTER_NAME }}/services/${{ env.ECS_SERVICE_NAME }}/details"
+            echo ""
+            echo "⚠️  Check the links above for detailed container logs and service status"
             exit 1
           else
             echo "❌ Service did not stabilize"
