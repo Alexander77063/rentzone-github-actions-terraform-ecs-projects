@@ -30,26 +30,10 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# Configure PHP
+# Configure PHP and Apache
 RUN sed -i 's/memory_limit = .*/memory_limit = 256M/' /etc/php/8.1/apache2/php.ini && \
-    sed -i 's/max_execution_time = .*/max_execution_time = 300/' /etc/php/8.1/apache2/php.ini
-
-# Enable Apache modules
-RUN a2enmod rewrite && a2enmod php8.1
-
-# Configure Apache for Laravel
-RUN echo '<VirtualHost *:80>' > /etc/apache2/sites-available/laravel.conf && \
-    echo '    DocumentRoot /var/www/html/public' >> /etc/apache2/sites-available/laravel.conf && \
-    echo '    <Directory /var/www/html/public>' >> /etc/apache2/sites-available/laravel.conf && \
-    echo '        Options Indexes FollowSymLinks' >> /etc/apache2/sites-available/laravel.conf && \
-    echo '        AllowOverride All' >> /etc/apache2/sites-available/laravel.conf && \
-    echo '        Require all granted' >> /etc/apache2/sites-available/laravel.conf && \
-    echo '    </Directory>' >> /etc/apache2/sites-available/laravel.conf && \
-    echo '</VirtualHost>' >> /etc/apache2/sites-available/laravel.conf
-
-# Disable default site and enable Laravel site
-RUN a2dissite 000-default && \
-    a2ensite laravel
+    sed -i 's/max_execution_time = .*/max_execution_time = 300/' /etc/php/8.1/apache2/php.ini && \
+    a2enmod rewrite && a2enmod php8.1
 
 WORKDIR /var/www/html
 
@@ -59,83 +43,100 @@ RUN rm -rf /var/www/html/*
 # Copy all files from build context
 COPY . .
 
-# Extract Laravel application from rentzone.zip
-RUN if [ -f "rentzone.zip" ]; then \
-        echo "Extracting Laravel application from rentzone.zip..."; \
-        unzip -q rentzone.zip; \
-        echo "Zip contents:"; \
-        ls -la; \
+# Debug and extract ZIP file
+RUN echo "=== DEBUGGING ZIP EXTRACTION ===" && \
+    echo "Current directory:" && pwd && \
+    echo "Files before extraction:" && ls -la && \
+    echo "" && \
+    if [ -f "rentzone.zip" ]; then \
+        echo "ZIP file found! Checking contents..." && \
+        unzip -l rentzone.zip && \
+        echo "" && \
+        echo "Extracting ZIP file..." && \
+        unzip -q rentzone.zip && \
+        echo "Files after extraction:" && ls -la && \
+        echo "" && \
+        echo "Looking for Laravel files..." && \
+        find . -name "artisan" -type f && \
+        find . -name "public" -type d && \
+        echo "" && \
         if [ -d "rentzone" ]; then \
-            echo "Moving files from rentzone/ directory..."; \
-            mv rentzone/* .; \
-            mv rentzone/.* . 2>/dev/null || true; \
-            rm -rf rentzone; \
-        fi; \
+            echo "Found rentzone directory, moving contents..." && \
+            ls -la rentzone/ && \
+            cp -r rentzone/* . 2>/dev/null || true && \
+            cp -r rentzone/.* . 2>/dev/null || true && \
+            rm -rf rentzone && \
+            echo "Files after moving from rentzone/:" && ls -la; \
+        fi && \
         rm -f rentzone.zip; \
-        echo "Laravel application extracted successfully"; \
     else \
-        echo "rentzone.zip not found"; \
-    fi
+        echo "No rentzone.zip found!"; \
+    fi && \
+    echo "=== END ZIP EXTRACTION DEBUG ==="
 
-# List files after extraction for debugging
-RUN echo "Files after extraction:" && ls -la
-
-# Create required Laravel directories if they don't exist
-RUN mkdir -p bootstrap/cache storage/logs storage/framework/sessions storage/framework/views storage/framework/cache
+# Create a comprehensive test index.php
+RUN echo '<?php' > index.php && \
+    echo 'echo "<h1>🚀 RentZone Application Debug</h1>";' >> index.php && \
+    echo 'echo "<p><strong>Status:</strong> Container Running</p>";' >> index.php && \
+    echo 'echo "<p><strong>PHP Version:</strong> " . phpversion() . "</p>";' >> index.php && \
+    echo 'echo "<p><strong>Server Time:</strong> " . date("Y-m-d H:i:s") . "</p>";' >> index.php && \
+    echo 'echo "<p><strong>Domain:</strong> " . $_SERVER["HTTP_HOST"] . "</p>";' >> index.php && \
+    echo 'echo "<hr>";' >> index.php && \
+    echo 'echo "<h3>Laravel Detection:</h3>";' >> index.php && \
+    echo 'if (file_exists("artisan")) {' >> index.php && \
+    echo '    echo "<p>✅ <strong>artisan found:</strong> Laravel application detected</p>";' >> index.php && \
+    echo '} else {' >> index.php && \
+    echo '    echo "<p>❌ <strong>artisan not found:</strong> Not a Laravel application</p>";' >> index.php && \
+    echo '}' >> index.php && \
+    echo 'if (file_exists("public/index.php")) {' >> index.php && \
+    echo '    echo "<p>✅ <strong>public/index.php found:</strong> Laravel public directory exists</p>";' >> index.php && \
+    echo '} else {' >> index.php && \
+    echo '    echo "<p>❌ <strong>public/index.php not found:</strong> Laravel public directory missing</p>";' >> index.php && \
+    echo '}' >> index.php && \
+    echo 'if (file_exists("composer.json")) {' >> index.php && \
+    echo '    echo "<p>✅ <strong>composer.json found:</strong> PHP project detected</p>";' >> index.php && \
+    echo '} else {' >> index.php && \
+    echo '    echo "<p>❌ <strong>composer.json not found:</strong> No PHP project</p>";' >> index.php && \
+    echo '}' >> index.php && \
+    echo 'echo "<hr>";' >> index.php && \
+    echo 'echo "<h3>Directory Contents:</h3>";' >> index.php && \
+    echo 'echo "<pre>";' >> index.php && \
+    echo '$files = scandir("/var/www/html");' >> index.php && \
+    echo 'foreach($files as $file) {' >> index.php && \
+    echo '    if($file != "." && $file != "..") {' >> index.php && \
+    echo '        $path = "/var/www/html/" . $file;' >> index.php && \
+    echo '        $type = is_dir($path) ? "[DIR]" : "[FILE]";' >> index.php && \
+    echo '        echo $type . " " . $file . "\n";' >> index.php && \
+    echo '    }' >> index.php && \
+    echo '}' >> index.php && \
+    echo 'echo "</pre>";' >> index.php && \
+    echo 'if(is_dir("public")) {' >> index.php && \
+    echo '    echo "<h3>Public Directory Contents:</h3>";' >> index.php && \
+    echo '    echo "<pre>";' >> index.php && \
+    echo '    $publicFiles = scandir("/var/www/html/public");' >> index.php && \
+    echo '    foreach($publicFiles as $file) {' >> index.php && \
+    echo '        if($file != "." && $file != "..") {' >> index.php && \
+    echo '            echo $file . "\n";' >> index.php && \
+    echo '        }' >> index.php && \
+    echo '    }' >> index.php && \
+    echo '    echo "</pre>";' >> index.php && \
+    echo '}' >> index.php && \
+    echo '?>' >> index.php
 
 # Set permissions
 RUN chown -R www-data:www-data /var/www/html && \
-    chmod -R 755 /var/www/html && \
-    chmod -R 775 bootstrap/cache storage 2>/dev/null || true
+    chmod -R 755 /var/www/html
 
-# Create .env file
-RUN echo "APP_NAME=RentZone" > .env && \
-    echo "APP_ENV=production" >> .env && \
-    echo "APP_KEY=" >> .env && \
-    echo "APP_DEBUG=false" >> .env && \
-    echo "APP_URL=https://${DOMAIN_NAME}/" >> .env && \
-    echo "LOG_CHANNEL=stderr" >> .env && \
-    echo "DB_CONNECTION=mysql" >> .env && \
-    echo "DB_HOST=${RDS_ENDPOINT}" >> .env && \
-    echo "DB_PORT=3306" >> .env && \
-    echo "DB_DATABASE=${RDS_DB_NAME}" >> .env && \
-    echo "DB_USERNAME=${RDS_DB_USERNAME}" >> .env && \
-    echo "DB_PASSWORD=${RDS_DB_PASSWORD}" >> .env
-
-# Create startup script
-RUN echo '#!/bin/bash' > /usr/local/bin/start-services.sh && \
-    echo 'set -e' >> /usr/local/bin/start-services.sh && \
-    echo 'cd /var/www/html' >> /usr/local/bin/start-services.sh && \
-    echo '' >> /usr/local/bin/start-services.sh && \
-    echo '# Debug: Show current directory contents' >> /usr/local/bin/start-services.sh && \
-    echo 'echo "=== Current Directory Contents ==="' >> /usr/local/bin/start-services.sh && \
-    echo 'ls -la' >> /usr/local/bin/start-services.sh && \
-    echo 'echo "=== Public Directory Contents ==="' >> /usr/local/bin/start-services.sh && \
-    echo 'ls -la public/ 2>/dev/null || echo "public directory not found"' >> /usr/local/bin/start-services.sh && \
-    echo '' >> /usr/local/bin/start-services.sh && \
-    echo '# Generate Laravel application key if artisan exists' >> /usr/local/bin/start-services.sh && \
-    echo 'if [ -f "artisan" ]; then' >> /usr/local/bin/start-services.sh && \
-    echo '    echo "Generating Laravel application key..."' >> /usr/local/bin/start-services.sh && \
-    echo '    php artisan key:generate --force' >> /usr/local/bin/start-services.sh && \
-    echo 'else' >> /usr/local/bin/start-services.sh && \
-    echo '    echo "Warning: artisan file not found - not a Laravel application"' >> /usr/local/bin/start-services.sh && \
-    echo 'fi' >> /usr/local/bin/start-services.sh && \
-    echo '' >> /usr/local/bin/start-services.sh && \
-    echo '# Try database operations if available' >> /usr/local/bin/start-services.sh && \
-    echo 'DB_HOST_CLEAN=$(echo ${DB_HOST} | cut -d: -f1)' >> /usr/local/bin/start-services.sh && \
-    echo 'if nc -z ${DB_HOST_CLEAN} 3306 2>/dev/null && [ -f "artisan" ]; then' >> /usr/local/bin/start-services.sh && \
-    echo '    echo "Database available, running migrations..."' >> /usr/local/bin/start-services.sh && \
-    echo '    php artisan migrate --force || echo "Migration failed, continuing..."' >> /usr/local/bin/start-services.sh && \
-    echo 'else' >> /usr/local/bin/start-services.sh && \
-    echo '    echo "Database not available or not Laravel app, skipping migrations"' >> /usr/local/bin/start-services.sh && \
-    echo 'fi' >> /usr/local/bin/start-services.sh && \
-    echo '' >> /usr/local/bin/start-services.sh && \
-    echo '# Start Apache' >> /usr/local/bin/start-services.sh && \
-    echo 'echo "Starting Apache web server..."' >> /usr/local/bin/start-services.sh && \
-    echo 'source /etc/apache2/envvars' >> /usr/local/bin/start-services.sh && \
-    echo 'exec /usr/sbin/apache2 -D FOREGROUND' >> /usr/local/bin/start-services.sh && \
-    chmod +x /usr/local/bin/start-services.sh
+# Simple startup
+RUN echo '#!/bin/bash' > /usr/local/bin/start.sh && \
+    echo 'echo "Starting Apache with debug info..."' >> /usr/local/bin/start.sh && \
+    echo 'cd /var/www/html' >> /usr/local/bin/start.sh && \
+    echo 'echo "Current directory contents:"' >> /usr/local/bin/start.sh && \
+    echo 'ls -la' >> /usr/local/bin/start.sh && \
+    echo 'source /etc/apache2/envvars' >> /usr/local/bin/start.sh && \
+    echo 'exec /usr/sbin/apache2 -D FOREGROUND' >> /usr/local/bin/start.sh && \
+    chmod +x /usr/local/bin/start.sh
 
 EXPOSE 80
 
-CMD ["/usr/local/bin/start-services.sh"]
+CMD ["/usr/local/bin/start.sh"]
