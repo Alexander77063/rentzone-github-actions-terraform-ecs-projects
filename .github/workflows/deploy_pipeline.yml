@@ -53,6 +53,22 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Verify AWS Configuration
+        run: |
+          echo "Testing AWS configuration..."
+          aws sts get-caller-identity
+          echo "AWS CLI version:"
+          aws --version
+          echo "Current region: ${{ env.AWS_REGION }}"
+
+      - name: Verify AWS Configuration
+        run: |
+          echo "Testing AWS configuration..."
+          aws sts get-caller-identity
+          echo "AWS CLI version:"
+          aws --version
+          echo "Current region: ${{ env.AWS_REGION }}"
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
@@ -77,7 +93,18 @@ jobs:
         id: terraform-outputs
         working-directory: ./iac
         run: |
-          echo "image_name=$(terraform output -raw image_name)" >> $GITHUB_OUTPUT
+          # List all available outputs for debugging
+          echo "Available Terraform outputs:"
+          terraform output
+          
+          # Check if outputs exist before extracting
+          if terraform output image_name >/dev/null 2>&1; then
+            echo "image_name=$(terraform output -raw image_name)" >> $GITHUB_OUTPUT
+          else
+            echo "Warning: image_name output not found"
+            exit 1
+          fi
+          
           echo "domain_name=$(terraform output -raw domain_name)" >> $GITHUB_OUTPUT
           echo "rds_endpoint=$(terraform output -raw rds_endpoint)" >> $GITHUB_OUTPUT
           echo "image_tag=$(terraform output -raw image_tag)" >> $GITHUB_OUTPUT
@@ -90,11 +117,17 @@ jobs:
       - name: Create ECR Repository
         if: env.TERRAFORM_ACTION == 'apply'
         run: |
-          if ! aws ecr describe-repositories --repository-names "${{ steps.terraform-outputs.outputs.image_name }}" >/dev/null 2>&1; then
-            echo "Creating ECR repository: ${{ steps.terraform-outputs.outputs.image_name }}"
-            aws ecr create-repository --repository-name "${{ steps.terraform-outputs.outputs.image_name }}"
+          IMAGE_NAME="${{ steps.terraform-outputs.outputs.image_name }}"
+          if [ -z "$IMAGE_NAME" ]; then
+            echo "Error: image_name is empty"
+            exit 1
+          fi
+          
+          if ! aws ecr describe-repositories --repository-names "$IMAGE_NAME" >/dev/null 2>&1; then
+            echo "Creating ECR repository: $IMAGE_NAME"
+            aws ecr create-repository --repository-name "$IMAGE_NAME"
           else
-            echo "ECR repository already exists: ${{ steps.terraform-outputs.outputs.image_name }}"
+            echo "ECR repository already exists: $IMAGE_NAME"
           fi
 
   # Combined build, migration, and deployment
@@ -171,21 +204,53 @@ jobs:
         env:
           RDS_ENDPOINT: ${{ needs.setup-infrastructure.outputs.rds_endpoint }}
         run: |
+          # Validate required variables
+          if [ -z "${{ env.RDS_ENDPOINT }}" ] || [ -z "${{ secrets.RDS_DB_NAME }}" ]; then
+            echo "Error: Missing required database connection variables"
+            exit 1
+          fi
+          
           # Download and setup Flyway
+          echo "Downloading Flyway ${{ env.FLYWAY_VERSION }}..."
           wget -qO- https://repo1.maven.org/maven2/org/flywaydb/flyway-commandline/${{ env.FLYWAY_VERSION }}/flyway-commandline-${{ env.FLYWAY_VERSION }}-linux-x64.tar.gz | tar xvz
           sudo ln -s $(pwd)/flyway-${{ env.FLYWAY_VERSION }}/flyway /usr/local/bin
+          
+          # Check if sql directory exists
+          if [ ! -d "sql" ]; then
+            echo "Warning: sql directory not found, skipping migration"
+            exit 0
+          fi
           
           # Setup SQL files
           rm -rf flyway-${{ env.FLYWAY_VERSION }}/sql/
           cp -r sql flyway-${{ env.FLYWAY_VERSION }}/
           
+          # Test database connection first
+          echo "Testing database connection..."
+          mysql -h ${{ env.RDS_ENDPOINT }} -u ${{ secrets.RDS_DB_USERNAME }} -p${{ secrets.RDS_DB_PASSWORD }} -e "SELECT 1;" ${{ secrets.RDS_DB_NAME }} || {
+            echo "Failed to connect to database, retrying in 30 seconds..."
+            sleep 30
+          }
+          
           # Run migration with retry
           cd flyway-${{ env.FLYWAY_VERSION }}
+          echo "Starting database migration..."
           for i in {1..5}; do
-            flyway -url=jdbc:mysql://${{ env.RDS_ENDPOINT }}:3306/${{ secrets.RDS_DB_NAME }} \
+            echo "Migration attempt $i/5"
+            if flyway -url=jdbc:mysql://${{ env.RDS_ENDPOINT }}:3306/${{ secrets.RDS_DB_NAME }} \
               -user=${{ secrets.RDS_DB_USERNAME }} \
               -password=${{ secrets.RDS_DB_PASSWORD }} \
-              -locations=filesystem:sql migrate && break || sleep 30
+              -locations=filesystem:sql migrate; then
+              echo "Migration completed successfully"
+              break
+            else
+              echo "Migration failed, attempt $i/5"
+              if [ $i -eq 5 ]; then
+                echo "All migration attempts failed"
+                exit 1
+              fi
+              sleep 30
+            fi
           done
 
       - name: Update ECS Service
@@ -195,10 +260,28 @@ jobs:
           ECS_FAMILY: ${{ needs.setup-infrastructure.outputs.task_definition_name }}
           ECS_IMAGE: ${{ secrets.ECR_REGISTRY }}/${{ needs.setup-infrastructure.outputs.image_name }}:${{ needs.setup-infrastructure.outputs.image_tag }}
         run: |
+          # Validate required variables
+          if [ -z "${{ env.ECS_CLUSTER_NAME }}" ] || [ -z "${{ env.ECS_SERVICE_NAME }}" ] || [ -z "${{ env.ECS_FAMILY }}" ]; then
+            echo "Error: Missing required ECS variables"
+            echo "Cluster: ${{ env.ECS_CLUSTER_NAME }}"
+            echo "Service: ${{ env.ECS_SERVICE_NAME }}"
+            echo "Task Definition: ${{ env.ECS_FAMILY }}"
+            exit 1
+          fi
+          
+          echo "Updating ECS service with image: ${{ env.ECS_IMAGE }}"
+          
           # Get current task definition
+          echo "Fetching current task definition..."
           TASK_DEFINITION=$(aws ecs describe-task-definition --task-definition ${{ env.ECS_FAMILY }})
           
+          if [ $? -ne 0 ]; then
+            echo "Failed to fetch task definition: ${{ env.ECS_FAMILY }}"
+            exit 1
+          fi
+          
           # Create new task definition with updated image
+          echo "Creating new task definition..."
           NEW_TASK_DEFINITION=$(echo "$TASK_DEFINITION" | jq --arg IMAGE "${{ env.ECS_IMAGE }}" '
             .taskDefinition | 
             .containerDefinitions[0].image = $IMAGE | 
@@ -206,19 +289,38 @@ jobs:
           ')
           
           # Register new task definition
+          echo "Registering new task definition..."
           NEW_TASK_INFO=$(aws ecs register-task-definition --cli-input-json "$NEW_TASK_DEFINITION")
+          
+          if [ $? -ne 0 ]; then
+            echo "Failed to register new task definition"
+            exit 1
+          fi
+          
           NEW_TD_REVISION=$(echo "$NEW_TASK_INFO" | jq -r '.taskDefinition.revision')
+          echo "New task definition revision: $NEW_TD_REVISION"
           
           # Update service
+          echo "Updating ECS service..."
           aws ecs update-service \
             --cluster ${{ env.ECS_CLUSTER_NAME }} \
             --service ${{ env.ECS_SERVICE_NAME }} \
             --task-definition ${{ env.ECS_FAMILY }}:$NEW_TD_REVISION \
             --force-new-deployment
           
+          if [ $? -ne 0 ]; then
+            echo "Failed to update ECS service"
+            exit 1
+          fi
+          
           # Wait for service to stabilize
           echo "Waiting for ECS service to become stable..."
           aws ecs wait services-stable --cluster ${{ env.ECS_CLUSTER_NAME }} --services ${{ env.ECS_SERVICE_NAME }}
           
-          echo "✅ Deployment completed successfully!"
-          echo "🚀 Application is now running at: ${{ needs.setup-infrastructure.outputs.domain_name }}"
+          if [ $? -eq 0 ]; then
+            echo "✅ Deployment completed successfully!"
+            echo "🚀 Application is now running at: ${{ needs.setup-infrastructure.outputs.domain_name }}"
+          else
+            echo "❌ Service did not stabilize within timeout period"
+            exit 1
+          fi
