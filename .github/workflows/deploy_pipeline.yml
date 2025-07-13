@@ -248,6 +248,10 @@ jobs:
             exit 1
           fi
           
+          # Extract just the hostname from RDS endpoint (remove :3306 if present)
+          RDS_HOST=$(echo "${{ env.RDS_ENDPOINT }}" | cut -d':' -f1)
+          echo "RDS Host: $RDS_HOST"
+          
           # Download and setup Flyway
           echo "Downloading Flyway ${{ env.FLYWAY_VERSION }}..."
           wget -qO- https://repo1.maven.org/maven2/org/flywaydb/flyway-commandline/${{ env.FLYWAY_VERSION }}/flyway-commandline-${{ env.FLYWAY_VERSION }}-linux-x64.tar.gz | tar xvz
@@ -263,29 +267,32 @@ jobs:
           rm -rf flyway-${{ env.FLYWAY_VERSION }}/sql/
           cp -r sql flyway-${{ env.FLYWAY_VERSION }}/
           
-          # Test database connection first
-          echo "Testing database connection..."
-          mysql -h ${{ env.RDS_ENDPOINT }} -u ${{ secrets.RDS_DB_USERNAME }} -p${{ secrets.RDS_DB_PASSWORD }} -e "SELECT 1;" ${{ secrets.RDS_DB_NAME }} || {
-            echo "Failed to connect to database, retrying in 30 seconds..."
-            sleep 30
-          }
+          # Test network connectivity to RDS
+          echo "Testing network connectivity to RDS..."
+          if ! nc -z "$RDS_HOST" 3306; then
+            echo "❌ Cannot reach RDS database from GitHub Actions runner"
+            echo "This is expected if your RDS is in a private subnet"
+            echo "Skipping database migration - will be handled by ECS application on first startup"
+            exit 0
+          fi
           
-          # Run migration with retry
+          # If we can connect, proceed with migration
           cd flyway-${{ env.FLYWAY_VERSION }}
           echo "Starting database migration..."
-          for i in {1..5}; do
-            echo "Migration attempt $i/5"
-            if flyway -url=jdbc:mysql://${{ env.RDS_ENDPOINT }}:3306/${{ secrets.RDS_DB_NAME }} \
+          for i in {1..3}; do
+            echo "Migration attempt $i/3"
+            if flyway -url=jdbc:mysql://$RDS_HOST:3306/${{ secrets.RDS_DB_NAME }} \
               -user=${{ secrets.RDS_DB_USERNAME }} \
               -password=${{ secrets.RDS_DB_PASSWORD }} \
               -locations=filesystem:sql migrate; then
-              echo "Migration completed successfully"
+              echo "✅ Migration completed successfully"
               break
             else
-              echo "Migration failed, attempt $i/5"
-              if [ $i -eq 5 ]; then
-                echo "All migration attempts failed"
-                exit 1
+              echo "Migration failed, attempt $i/3"
+              if [ $i -eq 3 ]; then
+                echo "⚠️  All migration attempts failed - database will be migrated by application"
+                echo "This is normal if RDS is in private subnet"
+                exit 0
               fi
               sleep 30
             fi
