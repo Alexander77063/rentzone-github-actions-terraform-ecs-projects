@@ -1,6 +1,7 @@
-FROM public.ecr.aws/amazonlinux/amazonlinux:2023
+FROM ubuntu:22.04
 
-ENV LANG=C.UTF-8 \
+ENV DEBIAN_FRONTEND=noninteractive \
+    LANG=C.UTF-8 \
     LC_ALL=C.UTF-8
 
 ARG PERSONAL_ACCESS_TOKEN
@@ -21,34 +22,47 @@ ENV PERSONAL_ACCESS_TOKEN=$PERSONAL_ACCESS_TOKEN \
     RDS_DB_USERNAME=$RDS_DB_USERNAME \
     RDS_DB_PASSWORD=$RDS_DB_PASSWORD
 
-# Install packages in stages to better handle errors
-RUN dnf update -y
-
-# Install basic packages
-RUN dnf install -y git httpd mysql
-
-# Install PHP and common extensions
-RUN dnf install -y php php-cli php-fpm php-mysqlnd php-mbstring php-xml php-gd php-curl php-pdo
-
-# Install additional tools
-RUN dnf install -y nmap-ncat curl
-
-# Clean up
-RUN dnf clean all
+# Install packages
+RUN apt-get update && \
+    apt-get install -y \
+    git \
+    apache2 \
+    php \
+    php-cli \
+    php-fpm \
+    php-mysql \
+    php-mbstring \
+    php-xml \
+    php-gd \
+    php-curl \
+    php-bcmath \
+    php-zip \
+    mysql-client \
+    netcat \
+    curl && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 
 # Configure PHP
-RUN sed -i 's/^memory_limit =.*/memory_limit = 256M/' /etc/php.ini && \
-    sed -i 's/^max_execution_time =.*/max_execution_time = 300/' /etc/php.ini
+RUN sed -i 's/^memory_limit =.*/memory_limit = 256M/' /etc/php/*/apache2/php.ini && \
+    sed -i 's/^max_execution_time =.*/max_execution_time = 300/' /etc/php/*/apache2/php.ini
+
+# Enable Apache modules
+RUN a2enmod rewrite && \
+    a2enmod php8.1
 
 # Configure Apache
-RUN sed -i '/<Directory "\/var\/www\/html">/,/<\/Directory>/ s/AllowOverride None/AllowOverride All/' /etc/httpd/conf/httpd.conf
+RUN echo '<Directory /var/www/html>' > /etc/apache2/conf-available/laravel.conf && \
+    echo '    AllowOverride All' >> /etc/apache2/conf-available/laravel.conf && \
+    echo '</Directory>' >> /etc/apache2/conf-available/laravel.conf && \
+    a2enconf laravel
 
 WORKDIR /var/www/html
 
 # Clone repository
 RUN git clone https://${PERSONAL_ACCESS_TOKEN}@github.com/${GITHUB_USERNAME}/${REPOSITORY_NAME}.git . && \
     mkdir -p bootstrap/cache storage/logs && \
-    chown -R apache:apache /var/www/html && \
+    chown -R www-data:www-data /var/www/html && \
     chmod -R 755 /var/www/html && \
     chmod -R 775 bootstrap/cache storage
 
@@ -75,11 +89,9 @@ RUN echo '#!/bin/bash' > /usr/local/bin/start-services.sh && \
     echo 'cd /var/www/html' >> /usr/local/bin/start-services.sh && \
     echo 'echo "Generating application key..."' >> /usr/local/bin/start-services.sh && \
     echo 'php artisan key:generate --force' >> /usr/local/bin/start-services.sh && \
-    echo 'echo "Starting PHP-FPM..."' >> /usr/local/bin/start-services.sh && \
-    echo 'mkdir -p /run/php-fpm' >> /usr/local/bin/start-services.sh && \
-    echo 'php-fpm -D' >> /usr/local/bin/start-services.sh && \
     echo 'echo "Starting Apache..."' >> /usr/local/bin/start-services.sh && \
-    echo 'exec /usr/sbin/httpd -D FOREGROUND' >> /usr/local/bin/start-services.sh && \
+    echo 'source /etc/apache2/envvars' >> /usr/local/bin/start-services.sh && \
+    echo 'exec /usr/sbin/apache2 -D FOREGROUND' >> /usr/local/bin/start-services.sh && \
     chmod +x /usr/local/bin/start-services.sh
 
 EXPOSE 80
