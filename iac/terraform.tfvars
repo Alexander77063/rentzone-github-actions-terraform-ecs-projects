@@ -17,8 +17,8 @@ secrets_manager_secret_name = "rentzone-app-dev-secrets"
 
 # rds variables
 multi_az_deployment          = "false"
-database_instance_identifier = "app-dev"
-database_instance_class      = "db.t3.medium"
+database_instance_identifier = "app-db-instance"
+database_instance_class      = "db.t3.micro"
 publicly_accessible          = "false"
 
 # acm variables
