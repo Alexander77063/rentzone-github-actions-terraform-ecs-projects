@@ -358,14 +358,61 @@ jobs:
             exit 1
           fi
           
-          # Wait for service to stabilize
-          echo "Waiting for ECS service to become stable..."
-          aws ecs wait services-stable --cluster ${{ env.ECS_CLUSTER_NAME }} --services ${{ env.ECS_SERVICE_NAME }}
+          # Check service status before waiting
+          echo "Checking current service status..."
+          aws ecs describe-services \
+            --cluster ${{ env.ECS_CLUSTER_NAME }} \
+            --services ${{ env.ECS_SERVICE_NAME }} \
+            --query 'services[0].{Status:status,TaskDefinition:taskDefinition,DesiredCount:desiredCount,RunningCount:runningCount,PendingCount:pendingCount}'
           
-          if [ $? -eq 0 ]; then
+          # Get recent task failures for debugging
+          echo "Checking for task failures..."
+          FAILED_TASKS=$(aws ecs list-tasks \
+            --cluster ${{ env.ECS_CLUSTER_NAME }} \
+            --service-name ${{ env.ECS_SERVICE_NAME }} \
+            --desired-status STOPPED \
+            --query 'taskArns[0:3]' \
+            --output text)
+          
+          if [ "$FAILED_TASKS" != "None" ] && [ ! -z "$FAILED_TASKS" ]; then
+            echo "Recent failed tasks found. Getting failure details..."
+            for task in $FAILED_TASKS; do
+              if [ "$task" != "None" ]; then
+                echo "Task: $task"
+                aws ecs describe-tasks \
+                  --cluster ${{ env.ECS_CLUSTER_NAME }} \
+                  --tasks $task \
+                  --query 'tasks[0].{StoppedReason:stoppedReason,Containers:containers[*].{Name:name,Reason:reason,ExitCode:exitCode}}'
+              fi
+            done
+          fi
+          
+          # Wait for service to stabilize with timeout
+          echo "Waiting for ECS service to become stable (timeout: 15 minutes)..."
+          timeout 900 aws ecs wait services-stable \
+            --cluster ${{ env.ECS_CLUSTER_NAME }} \
+            --services ${{ env.ECS_SERVICE_NAME }}
+          
+          WAIT_RESULT=$?
+          
+          if [ $WAIT_RESULT -eq 0 ]; then
             echo "✅ Deployment completed successfully!"
             echo "🚀 Application is now running at: ${{ needs.setup-infrastructure.outputs.domain_name }}"
+          elif [ $WAIT_RESULT -eq 124 ]; then
+            echo "⏰ Service deployment timed out after 15 minutes"
+            echo "Checking current status..."
+            aws ecs describe-services \
+              --cluster ${{ env.ECS_CLUSTER_NAME }} \
+              --services ${{ env.ECS_SERVICE_NAME }} \
+              --query 'services[0].{Status:status,RunningCount:runningCount,DesiredCount:desiredCount,Events:events[0:5].{CreatedAt:createdAt,Message:message}}'
+            echo "⚠️  Check CloudWatch logs for container startup issues"
+            echo "🔗 CloudWatch Logs: https://console.aws.amazon.com/cloudwatch/home?region=us-east-1#logsV2:log-groups/log-group/%2Fecs%2F${{ env.ECS_FAMILY }}"
+            exit 1
           else
-            echo "❌ Service did not stabilize within timeout period"
+            echo "❌ Service did not stabilize"
+            aws ecs describe-services \
+              --cluster ${{ env.ECS_CLUSTER_NAME }} \
+              --services ${{ env.ECS_SERVICE_NAME }} \
+              --query 'services[0].events[0:10]'
             exit 1
           fi
