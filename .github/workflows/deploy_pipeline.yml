@@ -183,6 +183,27 @@ jobs:
           DOMAIN_NAME: ${{ needs.setup-infrastructure.outputs.domain_name }}
           RDS_ENDPOINT: ${{ needs.setup-infrastructure.outputs.rds_endpoint }}
         run: |
+          # Debug: Print all environment variables
+          echo "=== Debugging Environment Variables ==="
+          echo "ENVIRONMENT_FILE_NAME: '${{ env.ENVIRONMENT_FILE_NAME }}'"
+          echo "ENV_FILE_BUCKET_NAME: '${{ env.ENV_FILE_BUCKET_NAME }}'"
+          echo "DOMAIN_NAME: '${{ env.DOMAIN_NAME }}'"
+          echo "RDS_ENDPOINT: '${{ env.RDS_ENDPOINT }}'"
+          echo "======================================="
+          
+          # Validate required variables
+          if [ -z "${{ env.ENVIRONMENT_FILE_NAME }}" ]; then
+            echo "Error: ENVIRONMENT_FILE_NAME is empty"
+            exit 1
+          fi
+          
+          if [ -z "${{ env.ENV_FILE_BUCKET_NAME }}" ]; then
+            echo "Error: ENV_FILE_BUCKET_NAME is empty"
+            echo "This means your Terraform is not outputting 'env_file_bucket_name'"
+            echo "Please check your Terraform configuration in ./iac directory"
+            exit 1
+          fi
+          
           # Create environment file
           cat > ${{ env.ENVIRONMENT_FILE_NAME }} << EOF
           PERSONAL_ACCESS_TOKEN=${{ secrets.PERSONAL_ACCESS_TOKEN }}
@@ -197,8 +218,25 @@ jobs:
           RDS_DB_PASSWORD=${{ secrets.RDS_DB_PASSWORD }}
           EOF
           
+          echo "Created environment file: ${{ env.ENVIRONMENT_FILE_NAME }}"
+          echo "File contents:"
+          cat ${{ env.ENVIRONMENT_FILE_NAME }}
+          
+          # Validate S3 bucket exists
+          echo "Checking if S3 bucket exists: ${{ env.ENV_FILE_BUCKET_NAME }}"
+          if aws s3 ls "s3://${{ env.ENV_FILE_BUCKET_NAME }}" >/dev/null 2>&1; then
+            echo "✅ S3 bucket exists and is accessible"
+          else
+            echo "❌ S3 bucket does not exist or is not accessible"
+            echo "Creating bucket: ${{ env.ENV_FILE_BUCKET_NAME }}"
+            aws s3 mb "s3://${{ env.ENV_FILE_BUCKET_NAME }}" --region ${{ env.AWS_REGION }}
+          fi
+          
           # Upload to S3
+          echo "Uploading to: s3://${{ env.ENV_FILE_BUCKET_NAME }}/${{ env.ENVIRONMENT_FILE_NAME }}"
           aws s3 cp ${{ env.ENVIRONMENT_FILE_NAME }} s3://${{ env.ENV_FILE_BUCKET_NAME }}/${{ env.ENVIRONMENT_FILE_NAME }}
+          
+          echo "✅ Environment file uploaded successfully"
 
       - name: Run Database Migration
         env:
