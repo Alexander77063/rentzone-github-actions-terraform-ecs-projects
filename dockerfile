@@ -1,139 +1,97 @@
-FROM ubuntu:22.04
+# Use the latest version of the Amazon Linux base image
+FROM amazonlinux:2
 
-ENV DEBIAN_FRONTEND=noninteractive \
-    LANG=C.UTF-8 \
-    LC_ALL=C.UTF-8
+# Update all installed packages to their latest versions
+RUN yum update -y 
 
+# Install required packages
+RUN yum install -y unzip wget httpd git
+
+# Install PHP and various extensions
+RUN amazon-linux-extras enable php7.4 && \
+    yum clean metadata && \
+    yum install -y \
+    php \
+    php-common \
+    php-pear \
+    php-cgi \
+    php-curl \
+    php-mbstring \
+    php-gd \
+    php-mysqlnd \
+    php-gettext \
+    php-json \
+    php-xml \
+    php-fpm \
+    php-intl \
+    php-zip
+
+# Download and install MySQL repository
+RUN wget https://repo.mysql.com/mysql80-community-release-el7-3.noarch.rpm && \
+    rpm --import https://repo.mysql.com/RPM-GPG-KEY-mysql-2023 && \
+    yum localinstall mysql80-community-release-el7-3.noarch.rpm -y && \
+    yum install mysql-community-server -y
+
+# Change directory to the html directory
+WORKDIR /var/www/html
+
+# Set the build argument directive
+ARG PERSONAL_ACCESS_TOKEN
+ARG GITHUB_USERNAME
+ARG REPOSITORY_NAME
+ARG WEB_FILE_ZIP
+ARG WEB_FILE_UNZIP
 ARG DOMAIN_NAME
 ARG RDS_ENDPOINT
 ARG RDS_DB_NAME
 ARG RDS_DB_USERNAME
 ARG RDS_DB_PASSWORD
 
-# Install packages
-RUN apt-get update && \
-    apt-get install -y \
-    apache2 \
-    php \
-    php-cli \
-    php-mysql \
-    php-mbstring \
-    php-xml \
-    php-gd \
-    php-curl \
-    php-bcmath \
-    php-zip \
-    php-intl \
-    mysql-client \
-    netcat-openbsd \
-    curl && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+# Use the build argument to set environment variables 
+ENV PERSONAL_ACCESS_TOKEN=$PERSONAL_ACCESS_TOKEN
+ENV GITHUB_USERNAME=$GITHUB_USERNAME
+ENV REPOSITORY_NAME=$REPOSITORY_NAME
+ENV WEB_FILE_ZIP=$WEB_FILE_ZIP
+ENV WEB_FILE_UNZIP=$WEB_FILE_UNZIP
+ENV DOMAIN_NAME=$DOMAIN_NAME
+ENV RDS_ENDPOINT=$RDS_ENDPOINT
+ENV RDS_DB_NAME=$RDS_DB_NAME
+ENV RDS_DB_USERNAME=$RDS_DB_USERNAME
+ENV RDS_DB_PASSWORD=$RDS_DB_PASSWORD
 
-# Configure PHP
-RUN sed -i 's/memory_limit = .*/memory_limit = 256M/' /etc/php/8.1/apache2/php.ini && \
-    sed -i 's/max_execution_time = .*/max_execution_time = 300/' /etc/php/8.1/apache2/php.ini
+# Clone the GitHub repository
+RUN git clone https://$PERSONAL_ACCESS_TOKEN@github.com/$GITHUB_USERNAME/$REPOSITORY_NAME.git
 
-# Enable Apache modules
-RUN a2enmod rewrite && a2enmod php8.1
+# Unzip the zip folder containing the web files
+RUN unzip $REPOSITORY_NAME/$WEB_FILE_ZIP -d $REPOSITORY_NAME/
 
-# Configure Apache Virtual Host for Laravel
-RUN echo '<VirtualHost *:80>' > /etc/apache2/sites-available/laravel.conf && \
-    echo '    DocumentRoot /var/www/html/public' >> /etc/apache2/sites-available/laravel.conf && \
-    echo '    <Directory /var/www/html/public>' >> /etc/apache2/sites-available/laravel.conf && \
-    echo '        Options Indexes FollowSymLinks' >> /etc/apache2/sites-available/laravel.conf && \
-    echo '        AllowOverride All' >> /etc/apache2/sites-available/laravel.conf && \
-    echo '        Require all granted' >> /etc/apache2/sites-available/laravel.conf && \
-    echo '        DirectoryIndex index.php' >> /etc/apache2/sites-available/laravel.conf && \
-    echo '    </Directory>' >> /etc/apache2/sites-available/laravel.conf && \
-    echo '</VirtualHost>' >> /etc/apache2/sites-available/laravel.conf
+# Copy the web files into the HTML directory
+RUN cp -av $REPOSITORY_NAME/$WEB_FILE_UNZIP/. /var/www/html
 
-# Disable default site and enable Laravel
-RUN a2dissite 000-default && a2ensite laravel
+# Remove the repository we cloned
+RUN rm -rf $REPOSITORY_NAME
 
-WORKDIR /var/www/html
+# Enable the mod_rewrite setting in the httpd.conf file
+RUN sed -i '/<Directory "\/var\/www\/html">/,/<\/Directory>/ s/AllowOverride None/AllowOverride All/' /etc/httpd/conf/httpd.conf
 
-# Remove default files
-RUN rm -rf /var/www/html/*
+# Give appropriate permissions
+RUN chmod -R 755 /var/www/html && \
+    chmod -R 775 storage/ && \
+    chown -R apache:apache /var/www/html
 
-# Copy ONLY Laravel application directories and files
-# DO NOT copy debug files, ZIP files, or build files
+# Configure Laravel environment
+RUN sed -i '/^APP_ENV=/ s/=.*$/=production/' .env && \
+    sed -i "/^APP_URL=/ s/=.*$/=https:\/\/$DOMAIN_NAME\//" .env && \
+    sed -i "/^DB_HOST=/ s/=.*$/=$RDS_ENDPOINT/" .env && \
+    sed -i "/^DB_DATABASE=/ s/=.*$/=$RDS_DB_NAME/" .env && \
+    sed -i "/^DB_USERNAME=/ s/=.*$/=$RDS_DB_USERNAME/" .env && \
+    sed -i "/^DB_PASSWORD=/ s/=.*$/=$RDS_DB_PASSWORD/" .env
 
-# Copy Laravel core directories
-COPY app ./app/
-COPY bootstrap ./bootstrap/
-COPY config ./config/
-COPY database ./database/
-COPY public ./public/
-COPY resources ./resources/
-COPY routes ./routes/
-COPY storage ./storage/
-COPY tests ./tests/
-COPY vendor ./vendor/
+# Copy the AppServiceProvider.php file
+COPY AppServiceProvider.php app/Providers/AppServiceProvider.php
 
-# Copy Laravel core files
-COPY artisan .
-COPY composer.json .
-COPY composer.lock .
-COPY package.json .
-
-# Copy Laravel config files if they exist
-COPY .htaccess . 2>/dev/null || echo "No .htaccess found"
-
-# Explicitly verify we have Laravel structure
-RUN echo "=== Verifying Laravel Structure ===" && \
-    if [ ! -f "artisan" ]; then echo "ERROR: artisan missing"; exit 1; fi && \
-    if [ ! -f "public/index.php" ]; then echo "ERROR: public/index.php missing"; exit 1; fi && \
-    if [ ! -d "app" ]; then echo "ERROR: app directory missing"; exit 1; fi && \
-    echo "✅ Laravel structure verified" && \
-    echo "Final directory contents:" && ls -la && \
-    echo "Public directory contents:" && ls -la public/
-
-# Set Laravel permissions
-RUN chown -R www-data:www-data /var/www/html && \
-    chmod -R 755 /var/www/html && \
-    chmod -R 775 storage bootstrap/cache
-
-# Create .env file
-RUN echo "APP_NAME=RentZone" > .env && \
-    echo "APP_ENV=production" >> .env && \
-    echo "APP_KEY=" >> .env && \
-    echo "APP_DEBUG=false" >> .env && \
-    echo "APP_URL=https://${DOMAIN_NAME}/" >> .env && \
-    echo "LOG_CHANNEL=stderr" >> .env && \
-    echo "DB_CONNECTION=mysql" >> .env && \
-    echo "DB_HOST=${RDS_ENDPOINT}" >> .env && \
-    echo "DB_PORT=3306" >> .env && \
-    echo "DB_DATABASE=${RDS_DB_NAME}" >> .env && \
-    echo "DB_USERNAME=${RDS_DB_USERNAME}" >> .env && \
-    echo "DB_PASSWORD=${RDS_DB_PASSWORD}" >> .env
-
-# Create startup script
-RUN echo '#!/bin/bash' > /usr/local/bin/start.sh && \
-    echo 'set -e' >> /usr/local/bin/start.sh && \
-    echo 'cd /var/www/html' >> /usr/local/bin/start.sh && \
-    echo 'echo "=== Laravel Application Starting ==="' >> /usr/local/bin/start.sh && \
-    echo 'echo "Directory contents:"' >> /usr/local/bin/start.sh && \
-    echo 'ls -la' >> /usr/local/bin/start.sh && \
-    echo 'echo "Public directory:"' >> /usr/local/bin/start.sh && \
-    echo 'ls -la public/' >> /usr/local/bin/start.sh && \
-    echo 'echo "Generating Laravel key..."' >> /usr/local/bin/start.sh && \
-    echo 'php artisan key:generate --force' >> /usr/local/bin/start.sh && \
-    echo 'echo "Caching Laravel config..."' >> /usr/local/bin/start.sh && \
-    echo 'php artisan config:cache' >> /usr/local/bin/start.sh && \
-    echo 'echo "Checking database connection..."' >> /usr/local/bin/start.sh && \
-    echo 'if nc -z $(echo ${DB_HOST} | cut -d: -f1) 3306 2>/dev/null; then' >> /usr/local/bin/start.sh && \
-    echo '    echo "Database available, running migrations..."' >> /usr/local/bin/start.sh && \
-    echo '    php artisan migrate --force || echo "Migration failed"' >> /usr/local/bin/start.sh && \
-    echo 'else' >> /usr/local/bin/start.sh && \
-    echo '    echo "Database not available, skipping migrations"' >> /usr/local/bin/start.sh && \
-    echo 'fi' >> /usr/local/bin/start.sh && \
-    echo 'echo "Starting Apache server..."' >> /usr/local/bin/start.sh && \
-    echo 'echo "Laravel app will be served from /var/www/html/public/"' >> /usr/local/bin/start.sh && \
-    echo 'source /etc/apache2/envvars' >> /usr/local/bin/start.sh && \
-    echo 'exec /usr/sbin/apache2 -D FOREGROUND' >> /usr/local/bin/start.sh && \
-    chmod +x /usr/local/bin/start.sh
-
+# Expose the default Apache port
 EXPOSE 80
 
-CMD ["/usr/local/bin/start.sh"]
+# Start Apache
+ENTRYPOINT ["/usr/sbin/httpd", "-D", "FOREGROUND"]
