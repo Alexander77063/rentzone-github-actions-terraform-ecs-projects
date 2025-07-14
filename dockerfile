@@ -89,7 +89,7 @@ RUN chmod -R 755 /var/www/html && \
     chmod -R 775 storage/ && \
     chown -R apache:apache /var/www/html
 
-# Configure Laravel environment
+# Configure Laravel environment and run database setup
 RUN sed -i '/^APP_ENV=/ s/=.*$/=production/' .env && \
     sed -i "/^APP_URL=/ s/=.*$/=https:\/\/$DOMAIN_NAME\//" .env && \
     sed -i "/^DB_HOST=/ s/=.*$/=$RDS_ENDPOINT/" .env && \
@@ -100,8 +100,45 @@ RUN sed -i '/^APP_ENV=/ s/=.*$/=production/' .env && \
 # Copy the AppServiceProvider.php file
 COPY AppServiceProvider.php app/Providers/AppServiceProvider.php
 
+# Create startup script that handles database setup
+RUN echo '#!/bin/bash' > /usr/local/bin/start-app.sh && \
+    echo 'cd /var/www/html' >> /usr/local/bin/start-app.sh && \
+    echo 'echo "Starting RentZone Laravel Application..."' >> /usr/local/bin/start-app.sh && \
+    echo '' >> /usr/local/bin/start-app.sh && \
+    echo '# Generate application key' >> /usr/local/bin/start-app.sh && \
+    echo 'php artisan key:generate --force' >> /usr/local/bin/start-app.sh && \
+    echo '' >> /usr/local/bin/start-app.sh && \
+    echo '# Wait for database to be ready' >> /usr/local/bin/start-app.sh && \
+    echo 'echo "Waiting for database connection..."' >> /usr/local/bin/start-app.sh && \
+    echo 'DB_HOST_CLEAN=$(echo $RDS_ENDPOINT | cut -d: -f1)' >> /usr/local/bin/start-app.sh && \
+    echo 'for i in {1..30}; do' >> /usr/local/bin/start-app.sh && \
+    echo '    if mysqladmin ping -h"$DB_HOST_CLEAN" -u"$RDS_DB_USERNAME" -p"$RDS_DB_PASSWORD" --silent; then' >> /usr/local/bin/start-app.sh && \
+    echo '        echo "Database connection successful!"' >> /usr/local/bin/start-app.sh && \
+    echo '        break' >> /usr/local/bin/start-app.sh && \
+    echo '    fi' >> /usr/local/bin/start-app.sh && \
+    echo '    echo "Waiting for database... ($i/30)"' >> /usr/local/bin/start-app.sh && \
+    echo '    sleep 2' >> /usr/local/bin/start-app.sh && \
+    echo 'done' >> /usr/local/bin/start-app.sh && \
+    echo '' >> /usr/local/bin/start-app.sh && \
+    echo '# Run database migrations' >> /usr/local/bin/start-app.sh && \
+    echo 'echo "Running database migrations..."' >> /usr/local/bin/start-app.sh && \
+    echo 'php artisan migrate --force || echo "Migration failed, continuing..."' >> /usr/local/bin/start-app.sh && \
+    echo '' >> /usr/local/bin/start-app.sh && \
+    echo '# Seed database if needed' >> /usr/local/bin/start-app.sh && \
+    echo 'echo "Running database seeders..."' >> /usr/local/bin/start-app.sh && \
+    echo 'php artisan db:seed --force || echo "Seeding failed, continuing..."' >> /usr/local/bin/start-app.sh && \
+    echo '' >> /usr/local/bin/start-app.sh && \
+    echo '# Clear and cache Laravel config' >> /usr/local/bin/start-app.sh && \
+    echo 'php artisan config:cache' >> /usr/local/bin/start-app.sh && \
+    echo 'php artisan route:cache' >> /usr/local/bin/start-app.sh && \
+    echo '' >> /usr/local/bin/start-app.sh && \
+    echo '# Start Apache' >> /usr/local/bin/start-app.sh && \
+    echo 'echo "Starting Apache web server..."' >> /usr/local/bin/start-app.sh && \
+    echo '/usr/sbin/httpd -D FOREGROUND' >> /usr/local/bin/start-app.sh && \
+    chmod +x /usr/local/bin/start-app.sh
+
 # Expose the default Apache port
 EXPOSE 80
 
-# Start Apache
-ENTRYPOINT ["/usr/sbin/httpd", "-D", "FOREGROUND"]
+# Start with our custom script
+ENTRYPOINT ["/usr/local/bin/start-app.sh"]
