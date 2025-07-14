@@ -45,6 +45,7 @@ RUN echo '<VirtualHost *:80>' > /etc/apache2/sites-available/laravel.conf && \
     echo '        Options Indexes FollowSymLinks' >> /etc/apache2/sites-available/laravel.conf && \
     echo '        AllowOverride All' >> /etc/apache2/sites-available/laravel.conf && \
     echo '        Require all granted' >> /etc/apache2/sites-available/laravel.conf && \
+    echo '        DirectoryIndex index.php' >> /etc/apache2/sites-available/laravel.conf && \
     echo '    </Directory>' >> /etc/apache2/sites-available/laravel.conf && \
     echo '</VirtualHost>' >> /etc/apache2/sites-available/laravel.conf
 
@@ -56,19 +57,45 @@ WORKDIR /var/www/html
 # Remove default files
 RUN rm -rf /var/www/html/*
 
-# Copy and extract application
+# Copy files but exclude problematic ones
 COPY . .
 
-# Extract Laravel from ZIP and clean up
+# Extract Laravel from ZIP
 RUN if [ -f "rentzone.zip" ]; then \
+        echo "Extracting rentzone.zip..."; \
         unzip -q rentzone.zip; \
         if [ -d "rentzone" ]; then \
             cp -r rentzone/* .; \
             rm -rf rentzone; \
         fi; \
         rm -f rentzone.zip; \
+    fi
+
+# FORCE remove any debug index.php in root (not in public/)
+RUN if [ -f "index.php" ] && [ -f "public/index.php" ]; then \
+        echo "Removing root debug index.php file..."; \
+        rm -f index.php; \
+    fi
+
+# Remove other debug files
+RUN rm -f start-services.sh dockerfile 2>/dev/null || true
+
+# Verify Laravel structure
+RUN echo "=== Laravel Structure Check ===" && \
+    if [ -f "public/index.php" ]; then \
+        echo "✅ Laravel public/index.php found"; \
+    else \
+        echo "❌ Laravel public/index.php missing"; \
+        exit 1; \
     fi && \
-    rm -f index.php start-services.sh dockerfile 2>/dev/null || true
+    if [ -f "artisan" ]; then \
+        echo "✅ Laravel artisan found"; \
+    else \
+        echo "❌ Laravel artisan missing"; \
+        exit 1; \
+    fi && \
+    echo "Root directory files:" && ls -la && \
+    echo "Public directory files:" && ls -la public/
 
 # Set Laravel permissions
 RUN chown -R www-data:www-data /var/www/html && \
@@ -91,13 +118,19 @@ RUN echo "APP_NAME=RentZone" > .env && \
 
 # Create startup script
 RUN echo '#!/bin/bash' > /usr/local/bin/start.sh && \
+    echo 'set -e' >> /usr/local/bin/start.sh && \
     echo 'cd /var/www/html' >> /usr/local/bin/start.sh && \
+    echo 'echo "=== Starting Laravel Application ==="' >> /usr/local/bin/start.sh && \
+    echo 'echo "Checking directory structure..."' >> /usr/local/bin/start.sh && \
+    echo 'ls -la' >> /usr/local/bin/start.sh && \
+    echo 'echo "Public directory:"' >> /usr/local/bin/start.sh && \
+    echo 'ls -la public/' >> /usr/local/bin/start.sh && \
     echo 'php artisan key:generate --force' >> /usr/local/bin/start.sh && \
     echo 'php artisan config:cache' >> /usr/local/bin/start.sh && \
-    echo 'php artisan route:cache' >> /usr/local/bin/start.sh && \
-    echo 'if nc -z $(echo ${DB_HOST} | cut -d: -f1) 3306; then' >> /usr/local/bin/start.sh && \
-    echo '    php artisan migrate --force || true' >> /usr/local/bin/start.sh && \
+    echo 'if nc -z $(echo ${DB_HOST} | cut -d: -f1) 3306 2>/dev/null; then' >> /usr/local/bin/start.sh && \
+    echo '    php artisan migrate --force || echo "Migration failed"' >> /usr/local/bin/start.sh && \
     echo 'fi' >> /usr/local/bin/start.sh && \
+    echo 'echo "Starting Apache with DocumentRoot: /var/www/html/public"' >> /usr/local/bin/start.sh && \
     echo 'source /etc/apache2/envvars' >> /usr/local/bin/start.sh && \
     echo 'exec /usr/sbin/apache2 -D FOREGROUND' >> /usr/local/bin/start.sh && \
     chmod +x /usr/local/bin/start.sh
