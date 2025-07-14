@@ -16,7 +16,7 @@ on:
 
 env:
   AWS_REGION: us-east-1
-  TERRAFORM_ACTION: ${{ github.event.inputs.terraform_action || 'apply' }}
+  TERRAFORM_ACTION: ${{ github.event.inputs.terraform_action || 'destroy' }}
   
   # Application Configuration
   GITHUB_USERNAME: Alexander77063
