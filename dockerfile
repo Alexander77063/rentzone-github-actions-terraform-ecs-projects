@@ -1,4 +1,3 @@
-
 FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -27,8 +26,7 @@ RUN apt-get update && \
     php-intl \
     mysql-client \
     netcat-openbsd \
-    curl \
-    unzip && \
+    curl && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
@@ -58,64 +56,43 @@ WORKDIR /var/www/html
 # Remove default files
 RUN rm -rf /var/www/html/*
 
-# Copy only what we need, excluding problematic files
-COPY rentzone.zip .
+# Copy ONLY Laravel application directories and files
+# DO NOT copy debug files, ZIP files, or build files
 
-# Extract and selectively copy Laravel files
-RUN echo "=== Extracting Laravel Application ===" && \
-    if [ -f "rentzone.zip" ]; then \
-        echo "Contents of ZIP file:"; \
-        unzip -l rentzone.zip; \
-        echo ""; \
-        echo "Extracting ZIP..."; \
-        unzip -q rentzone.zip; \
-        echo ""; \
-        if [ -d "rentzone" ]; then \
-            echo "Files in rentzone directory:"; \
-            ls -la rentzone/; \
-            echo ""; \
-            echo "Copying Laravel files selectively..."; \
-            # Copy Laravel directories and essential files \
-            cp -r rentzone/app . 2>/dev/null || true; \
-            cp -r rentzone/bootstrap . 2>/dev/null || true; \
-            cp -r rentzone/config . 2>/dev/null || true; \
-            cp -r rentzone/database . 2>/dev/null || true; \
-            cp -r rentzone/public . 2>/dev/null || true; \
-            cp -r rentzone/resources . 2>/dev/null || true; \
-            cp -r rentzone/routes . 2>/dev/null || true; \
-            cp -r rentzone/storage . 2>/dev/null || true; \
-            cp -r rentzone/tests . 2>/dev/null || true; \
-            cp -r rentzone/vendor . 2>/dev/null || true; \
-            # Copy Laravel files but NOT index.php \
-            cp rentzone/artisan . 2>/dev/null || true; \
-            cp rentzone/composer.json . 2>/dev/null || true; \
-            cp rentzone/composer.lock . 2>/dev/null || true; \
-            cp rentzone/package.json . 2>/dev/null || true; \
-            cp rentzone/.htaccess . 2>/dev/null || true; \
-            # DO NOT copy index.php from root \
-            echo "Skipping root index.php from ZIP"; \
-            rm -rf rentzone; \
-        else \
-            echo "No rentzone directory found, copying all files except index.php"; \
-            # Copy everything except index.php \
-            find . -name "index.php" -not -path "./public/*" -delete; \
-        fi; \
-        rm -f rentzone.zip; \
-    else \
-        echo "No rentzone.zip found"; \
-    fi
+# Copy Laravel core directories
+COPY app ./app/
+COPY bootstrap ./bootstrap/
+COPY config ./config/
+COPY database ./database/
+COPY public ./public/
+COPY resources ./resources/
+COPY routes ./routes/
+COPY storage ./storage/
+COPY tests ./tests/
+COPY vendor ./vendor/
 
-# Ensure we have a clean state
-RUN echo "=== Final Cleanup ===" && \
-    # Remove any remaining debug files \
-    rm -f index.php start-services.sh dockerfile 2>/dev/null || true && \
-    echo "Files after cleanup:" && ls -la && \
-    echo "Public directory:" && ls -la public/ 2>/dev/null || echo "No public directory"
+# Copy Laravel core files
+COPY artisan .
+COPY composer.json .
+COPY composer.lock .
+COPY package.json .
+
+# Copy Laravel config files if they exist
+COPY .htaccess . 2>/dev/null || echo "No .htaccess found"
+
+# Explicitly verify we have Laravel structure
+RUN echo "=== Verifying Laravel Structure ===" && \
+    if [ ! -f "artisan" ]; then echo "ERROR: artisan missing"; exit 1; fi && \
+    if [ ! -f "public/index.php" ]; then echo "ERROR: public/index.php missing"; exit 1; fi && \
+    if [ ! -d "app" ]; then echo "ERROR: app directory missing"; exit 1; fi && \
+    echo "✅ Laravel structure verified" && \
+    echo "Final directory contents:" && ls -la && \
+    echo "Public directory contents:" && ls -la public/
 
 # Set Laravel permissions
 RUN chown -R www-data:www-data /var/www/html && \
     chmod -R 755 /var/www/html && \
-    chmod -R 775 storage bootstrap/cache 2>/dev/null || true
+    chmod -R 775 storage bootstrap/cache
 
 # Create .env file
 RUN echo "APP_NAME=RentZone" > .env && \
@@ -131,27 +108,28 @@ RUN echo "APP_NAME=RentZone" > .env && \
     echo "DB_USERNAME=${RDS_DB_USERNAME}" >> .env && \
     echo "DB_PASSWORD=${RDS_DB_PASSWORD}" >> .env
 
-# Create startup script with validation
+# Create startup script
 RUN echo '#!/bin/bash' > /usr/local/bin/start.sh && \
     echo 'set -e' >> /usr/local/bin/start.sh && \
     echo 'cd /var/www/html' >> /usr/local/bin/start.sh && \
-    echo 'echo "=== Starting Laravel Application ==="' >> /usr/local/bin/start.sh && \
-    echo 'echo "Final directory check:"' >> /usr/local/bin/start.sh && \
+    echo 'echo "=== Laravel Application Starting ==="' >> /usr/local/bin/start.sh && \
+    echo 'echo "Directory contents:"' >> /usr/local/bin/start.sh && \
     echo 'ls -la' >> /usr/local/bin/start.sh && \
-    echo 'if [ -f "index.php" ]; then' >> /usr/local/bin/start.sh && \
-    echo '    echo "ERROR: Debug index.php still exists, removing..."' >> /usr/local/bin/start.sh && \
-    echo '    rm -f index.php' >> /usr/local/bin/start.sh && \
-    echo 'fi' >> /usr/local/bin/start.sh && \
-    echo 'if [ ! -f "public/index.php" ]; then' >> /usr/local/bin/start.sh && \
-    echo '    echo "ERROR: Laravel public/index.php missing!"' >> /usr/local/bin/start.sh && \
-    echo '    exit 1' >> /usr/local/bin/start.sh && \
-    echo 'fi' >> /usr/local/bin/start.sh && \
+    echo 'echo "Public directory:"' >> /usr/local/bin/start.sh && \
+    echo 'ls -la public/' >> /usr/local/bin/start.sh && \
+    echo 'echo "Generating Laravel key..."' >> /usr/local/bin/start.sh && \
     echo 'php artisan key:generate --force' >> /usr/local/bin/start.sh && \
+    echo 'echo "Caching Laravel config..."' >> /usr/local/bin/start.sh && \
     echo 'php artisan config:cache' >> /usr/local/bin/start.sh && \
+    echo 'echo "Checking database connection..."' >> /usr/local/bin/start.sh && \
     echo 'if nc -z $(echo ${DB_HOST} | cut -d: -f1) 3306 2>/dev/null; then' >> /usr/local/bin/start.sh && \
+    echo '    echo "Database available, running migrations..."' >> /usr/local/bin/start.sh && \
     echo '    php artisan migrate --force || echo "Migration failed"' >> /usr/local/bin/start.sh && \
+    echo 'else' >> /usr/local/bin/start.sh && \
+    echo '    echo "Database not available, skipping migrations"' >> /usr/local/bin/start.sh && \
     echo 'fi' >> /usr/local/bin/start.sh && \
-    echo 'echo "Starting Apache - serving Laravel from /var/www/html/public"' >> /usr/local/bin/start.sh && \
+    echo 'echo "Starting Apache server..."' >> /usr/local/bin/start.sh && \
+    echo 'echo "Laravel app will be served from /var/www/html/public/"' >> /usr/local/bin/start.sh && \
     echo 'source /etc/apache2/envvars' >> /usr/local/bin/start.sh && \
     echo 'exec /usr/sbin/apache2 -D FOREGROUND' >> /usr/local/bin/start.sh && \
     chmod +x /usr/local/bin/start.sh
