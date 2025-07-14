@@ -60,16 +60,26 @@ ENV RDS_DB_USERNAME=$RDS_DB_USERNAME
 ENV RDS_DB_PASSWORD=$RDS_DB_PASSWORD
 
 # Clone the GitHub repository
-RUN git clone https://$PERSONAL_ACCESS_TOKEN@github.com/$GITHUB_USERNAME/$REPOSITORY_NAME.git
+RUN echo "Cloning repository: https://github.com/$GITHUB_USERNAME/$REPOSITORY_NAME.git" && \
+    git clone https://$PERSONAL_ACCESS_TOKEN@github.com/$GITHUB_USERNAME/$REPOSITORY_NAME.git
 
 # Unzip the zip folder containing the web files
-RUN unzip $REPOSITORY_NAME/$WEB_FILE_ZIP -d $REPOSITORY_NAME/
+RUN echo "Extracting $WEB_FILE_ZIP from $REPOSITORY_NAME/" && \
+    ls -la $REPOSITORY_NAME/ && \
+    unzip $REPOSITORY_NAME/$WEB_FILE_ZIP -d $REPOSITORY_NAME/
 
 # Copy the web files into the HTML directory
-RUN cp -av $REPOSITORY_NAME/$WEB_FILE_UNZIP/. /var/www/html
+RUN echo "Contents after extraction:" && \
+    ls -la $REPOSITORY_NAME/$WEB_FILE_UNZIP/ && \
+    cp -av $REPOSITORY_NAME/$WEB_FILE_UNZIP/. /var/www/html
 
 # Remove the repository we cloned
 RUN rm -rf $REPOSITORY_NAME
+
+# Verify Laravel structure
+RUN echo "Laravel application files:" && \
+    ls -la /var/www/html && \
+    if [ ! -f "artisan" ]; then echo "ERROR: artisan not found"; exit 1; fi
 
 # Enable the mod_rewrite setting in the httpd.conf file
 RUN sed -i '/<Directory "\/var\/www\/html">/,/<\/Directory>/ s/AllowOverride None/AllowOverride All/' /etc/httpd/conf/httpd.conf
